@@ -11,7 +11,7 @@ st.set_page_config(page_title="Identificador de Aeronaves", page_icon="🛩️",
 
 st.title("🛩️ Rastreador Histórico de Aeronaves")
 st.markdown("""
-Configurá tu lista de vigilancia a la izquierda asociando la **Matrícula** con su **Código HEX**. 
+Configurá tu lista de vigilancia únicamente por **Matrícula** a la izquierda. 
 El sistema buscará los movimientos del día anterior en la red de **ADSB.fi** y generará archivos KMZ para Google Earth.
 """)
 
@@ -20,49 +20,49 @@ URL_HISTORIAL_BASE = "https://adsb.fi/history"
 # =====================================================================
 # GESTIÓN DE MEMORIA TEMPORAL (SESSION STATE)
 # =====================================================================
-# Iniciamos con el ejemplo real de la RAF que mencionaste y otros
+# Iniciamos la lista con ejemplos reales directamente usando su identificador
 if "lista_aviones" not in st.session_state:
     st.session_state.lista_aviones = {
-        "43c5ef": "ZM421 (RAF A400M)",
-        "ae0133": "C-17 Globemaster USAF",
-        "34612a": "Aeronave Militar Ejemplo"
+        "43c5ef": "43C5EF (RAF ZM421)",
+        "ae0133": "AE0133 (C-17 USAF)"
     }
 
 # =====================================================================
-# PANEL LATERAL: GESTIÓN DE OBJETIVOS (MATRÍCULA + HEX)
+# PANEL LATERAL: UN SOLO MENÚ Y UN SOLO CASILLERO
 # =====================================================================
 st.sidebar.header("🛠️ Panel de Vigilancia")
 
-st.sidebar.subheader("➕ Agregar / Editar Objetivo")
-# Pedimos ambos datos para que la API no falle jamás
-nueva_matricula = st.sidebar.text_input("Matrícula o Nombre (Ej: ZM421 RAF)").strip()
-nuevo_hex = st.sidebar.text_input("Código HEX de 6 caracteres (Ej: 43C5EF)", max_chars=6).lower().strip()
+st.sidebar.subheader("➕ Agregar Objetivo")
+# Único casillero de la interfaz lateral
+nueva_matricula = st.sidebar.text_input("Matrícula de la Aeronave").strip()
 
 if st.sidebar.button("💾 Guardar en la Lista"):
-    if nueva_matricula and nuevo_hex and len(nuevo_hex) == 6:
-        # Guardamos usando el HEX como clave única para la API
-        st.session_state.lista_aviones[nuevo_hex] = nueva_matricula
-        st.sidebar.success(f"Registrado: {nueva_matricula} [{nuevo_hex.upper()}]")
+    if nueva_matricula:
+        # Limpiamos espacios y pasamos a minúsculas para que funcione como clave de búsqueda
+        clave_busqueda = nueva_matricula.lower().replace(" ", "")
+        st.session_state.lista_aviones[clave_busqueda] = nueva_matricula
+        st.sidebar.success(f"✈️ {nueva_matricula} agregada.")
         st.rerun()
     else:
-        st.sidebar.error("Por favor, completá la Matrícula y el código HEX (debe tener 6 caracteres).")
+        st.sidebar.error("Por favor, ingresá una matrícula.")
 
 st.sidebar.markdown("---")
 
-# Listado actual de vigilancia
-st.sidebar.subheader("📋 Objetivos en Vigilancia")
+# Listado limpio con botón para borrar
+st.sidebar.subheader("📋 Matrículas en Vigilancia")
 aviones_a_buscar = st.session_state.lista_aviones
 
 if aviones_a_buscar:
-    for hex_code, matricula in list(aviones_a_buscar.items()):
+    for clave, matricula in list(aviones_a_buscar.items()):
         col_texto, col_borrar = st.sidebar.columns([4, 1])
-        col_texto.markdown(f"✈️ **{matricula}** <br><small>HEX: {hex_code.upper()}</small>", unsafe_allow_html=True)
+        col_texto.markdown(f"✈️ **{matricula}**")
         
-        if col_borrar.button("🗑️", key=f"del_{hex_code}"):
-            del st.session_state.lista_aviones[hex_code]
+        # Botón directo para eliminar de la lista
+        if col_borrar.button("🗑️", key=f"del_{clave}"):
+            del st.session_state.lista_aviones[clave]
             st.rerun()
 else:
-    st.sidebar.warning("La lista está vacía. Agregá un objetivo arriba.")
+    st.sidebar.warning("La lista está vacía.")
 
 # =====================================================================
 # CUERPO PRINCIPAL: EJECUCIÓN DEL ANÁLISIS
@@ -72,19 +72,19 @@ st.subheader("🛰️ Control de Rastreo")
 if st.button("🚀 Iniciar Análisis del Día Anterior", type="primary"):
     
     if not aviones_a_buscar:
-        st.warning("⚠️ No tenés aeronaves configuradas en tu lista.")
+        st.warning("⚠️ No tenés aeronaves configuradas en tu lista de vigilancia.")
     else:
         fecha_ayer = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        st.info(f"Consultando registros históricos en ADSB.fi del día: **{fecha_ayer}**...")
+        st.info(f"Consultando registros históricos del día: **{fecha_ayer}**...")
         
         vuelos_totales_detectados = 0
         progreso = st.progress(0)
         total_aviones = len(aviones_a_buscar)
         
-        # El rastreo usa el código HEX real para la consulta web
-        for index, (hex_code, matricula) in enumerate(aviones_a_buscar.items()):
-            dos_primeros = hex_code[:2]
-            url_peticion = f"{URL_HISTORIAL_BASE}/{fecha_ayer}/traces/{dos_primeros}/{hex_code}.json"
+        # El bucle recorre la lista limpia usando la clave ingresada
+        for index, (clave, matricula) in enumerate(aviones_a_buscar.items()):
+            dos_primeros = clave[:2]
+            url_peticion = f"{URL_HISTORIAL_BASE}/{fecha_ayer}/traces/{dos_primeros}/{clave}.json"
             
             try:
                 respuesta = requests.get(url_peticion, timeout=10)
@@ -94,9 +94,9 @@ if st.button("🚀 Iniciar Análisis del Día Anterior", type="primary"):
                     
                     if puntos and len(puntos) >= 5:
                         vuelos_totales_detectados += 1
-                        st.success(f"🚨 **¡Movimiento Detectado!** Aeronave: {matricula} [{hex_code.upper()}]")
+                        st.success(f"🚨 **¡Movimiento Detectado!** Aeronave: {matricula}")
                         
-                        # Generamos el archivo geográfico KMZ tridimensional
+                        # Generamos el archivo geográfico KMZ tridimensional para Google Earth
                         kml = simplekml.Kml()
                         coordenadas = []
                         
@@ -117,20 +117,21 @@ if st.button("🚀 Iniciar Análisis del Día Anterior", type="primary"):
                             ruta.style.linestyle.width = 4
                             
                             marcador = kml.newpoint(name="Inicio de Traza", coords=[coordenadas[0]])
-                            marcador.description = f"Aeronave: {matricula}\nHEX: {hex_code.upper()}\nFecha: {fecha_ayer}"
+                            marcador.description = f"Aeronave: {matricula}\nFecha: {fecha_ayer}"
                             
-                            nombre_temporal = f"temp_{hex_code}.kmz"
+                            nombre_temporal = f"temp_{clave}.kmz"
                             kml.savekmz(nombre_temporal)
                             with open(nombre_temporal, "rb") as f:
                                 kmz_data = f.read()
                             os.remove(nombre_temporal)
                             
+                            # Ofrecemos la descarga web directa del archivo mapeado
                             st.download_button(
                                 label=f"📥 Descargar KMZ de {matricula}",
                                 data=kmz_data,
-                                file_name=f"traza_{matricula.replace(' ', '_')}_{fecha_ayer}.kmz",
+                                file_name=f"traza_{clave}_{fecha_ayer}.kmz",
                                 mime="application/vnd.google-earth.kmz",
-                                key=f"btn_{hex_code}"
+                                key=f"btn_{clave}"
                             )
                             
                 elif respuesta.status_code != 404:
@@ -147,4 +148,4 @@ if st.button("🚀 Iniciar Análisis del Día Anterior", type="primary"):
             st.info(f"💤 **Sin novedades:** Ninguna de las aeronaves de tu lista registró movimientos ayer.")
         else:
             st.balloons()
-            st.success(f"✨ Análisis finalizado.")
+            st.success(f"✨ Análisis finalizado con éxito.")
