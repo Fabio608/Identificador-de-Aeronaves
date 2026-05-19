@@ -1,486 +1,268 @@
 import os
-import re
-import requests
+import json
+import time
 import simplekml
 import streamlit as st
 
-from datetime import datetime, timedelta
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from playwright.sync_api import sync_playwright
 
-# =====================================================================
-# CONFIGURACIÓN GENERAL
-# =====================================================================
+# ============================================================
+# CONFIG
+# ============================================================
 
 st.set_page_config(
-    page_title="Rastreador de Aeronaves",
+    page_title="FR24 → KMZ",
     page_icon="🛩️",
     layout="centered"
 )
 
-st.title("🛩️ Rastreador y Generador de Trazas KMZ")
+st.title("🛩️ Importador FR24 a KMZ")
 
 st.markdown("""
-Buscá aeronaves por:
+Pegá un link de Flightradar24 y el sistema intentará:
 
-- Matrícula real (LV-FQZ, TC-66, ZM421)
-- Código HEX ADS-B
-
-El sistema buscará su historial y generará un archivo compatible con Google Earth.
+- detectar el replay
+- extraer la trayectoria
+- generar un archivo KMZ
 """)
 
-st.info("""
-ℹ️ Importante:
-ADSB.fi no registra TODOS los vuelos del mundo.
-La disponibilidad depende de:
-- cobertura ADS-B
-- receptores cercanos
-- MLAT
-- zonas militares
-- transponder activo
-""")
+# ============================================================
+# INPUT
+# ============================================================
 
-# =====================================================================
-# URLs BASE
-# =====================================================================
-
-URL_HISTORIAL_BASE = "https://adsb.fi/history"
-URL_BUSCADOR_HEX = "https://api.adsb.one/v2/registration"
-
-# =====================================================================
-# SESIÓN HTTP ROBUSTA
-# =====================================================================
-
-session = requests.Session()
-
-retries = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[500, 502, 503, 504]
+url = st.text_input(
+    "Pegá el link de Flightradar24:",
+    placeholder="https://www.flightradar24.com/data/aircraft/tc-66#3fc194d1"
 )
 
-session.mount("https://", HTTPAdapter(max_retries=retries))
+# ============================================================
+# FUNCION PRINCIPAL
+# ============================================================
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+def obtener_datos_vuelo(fr24_url):
 
-# =====================================================================
-# FUNCIONES AUXILIARES
-# =====================================================================
+    datos_encontrados = []
 
-def es_hex_valido(valor):
-    """
-    Verifica si el valor parece un HEX ADS-B válido
-    """
-    return bool(re.fullmatch(r"[0-9a-fA-F]{6,8}(_r)?", valor))
+    with sync_playwright() as p:
 
-
-def obtener_hex_desde_matricula(matricula):
-    """
-    Traduce matrícula -> HEX usando API externa
-    """
-
-    # Mapeo manual para aeronaves especiales/militares
-    machete = {
-        "tc61": "e0224b",
-        "tc64": "e0224d",
-        "tc66": "e0224e",
-        "tc69": "e02250",
-        "tc100": "e01862",
-        "zm421": "43c5ef_r"
-    }
-
-    if matricula in machete:
-        return machete[matricula]
-
-    try:
-        url = f"{URL_BUSCADOR_HEX}/{matricula}"
-
-        respuesta = session.get(
-            url,
-            headers=HEADERS,
-            timeout=8
+        browser = p.chromium.launch(
+            headless=True
         )
 
-        if respuesta.status_code == 200:
+        page = browser.new_page()
 
-            datos = respuesta.json()
+        # ----------------------------------------------------
+        # INTERCEPTAR RESPUESTAS
+        # ----------------------------------------------------
 
-            if "ac" in datos and len(datos["ac"]) > 0:
+        def interceptar(response):
 
-                hex_code = datos["ac"][0].get("hex")
+            try:
 
-                if hex_code:
-                    return hex_code.strip().lower()
+                content_type = response.headers.get(
+                    "content-type", ""
+                )
 
-    except Exception as e:
-        st.warning(f"Error consultando API de matrículas: {e}")
+                # buscamos respuestas JSON
+                if "application/json" in content_type:
 
-    return None
+                    data = response.json()
 
+                    # buscamos estructuras con lat/lon
+                    texto = json.dumps(data)
 
-def convertir_altitud(alt_pies):
-    """
-    Convierte pies -> metros de forma segura
-    """
+                    if (
+                        "lat" in texto.lower()
+                        and "lon" in texto.lower()
+                    ):
 
-    try:
+                        datos_encontrados.append(data)
 
-        if alt_pies in ["ground", None, "", "null"]:
-            return 0
+            except:
+                pass
 
-        return float(alt_pies) * 0.3048
+        page.on("response", interceptar)
 
-    except:
-        return 0
+        # ----------------------------------------------------
+        # ABRIR URL
+        # ----------------------------------------------------
 
+        page.goto(fr24_url, timeout=60000)
 
-def extraer_coordenadas(trace):
-    """
-    Procesa el trace ADS-B y devuelve coordenadas KML
-    """
+        # esperar carga
+        page.wait_for_timeout(10000)
 
-    coordenadas = []
+        browser.close()
 
-    for punto in trace:
+    return datos_encontrados
 
-        try:
-            # Formato habitual:
-            # [timestamp, lat, lon, alt, ...]
-            lat = punto[1]
-            lon = punto[2]
+# ============================================================
+# EXTRAER COORDENADAS
+# ============================================================
 
-            alt_pies = punto[3] if len(punto) > 3 else 0
+def buscar_coordenadas(objeto):
 
-            alt_metros = convertir_altitud(alt_pies)
+    coords = []
 
-            coordenadas.append(
-                (lon, lat, alt_metros)
-            )
+    def recorrer(x):
 
-        except Exception:
-            continue
+        if isinstance(x, dict):
 
-    return coordenadas
+            # detectar posibles puntos
+            if (
+                "lat" in x
+                and "lon" in x
+            ):
 
+                try:
 
-def generar_kmz(coordenadas, nombre, fecha, hex_code):
-    """
-    Genera KMZ temporal y devuelve bytes
-    """
+                    lat = float(x["lat"])
+                    lon = float(x["lon"])
+
+                    alt = 0
+
+                    if "alt" in x:
+                        alt = float(x["alt"])
+
+                    coords.append(
+                        (lon, lat, alt)
+                    )
+
+                except:
+                    pass
+
+            for v in x.values():
+                recorrer(v)
+
+        elif isinstance(x, list):
+
+            for item in x:
+                recorrer(item)
+
+    recorrer(objeto)
+
+    return coords
+
+# ============================================================
+# GENERAR KMZ
+# ============================================================
+
+def generar_kmz(coordenadas):
 
     kml = simplekml.Kml()
 
     ruta = kml.newlinestring(
-        name=f"Vuelo {nombre} - {fecha}"
+        name="Vuelo FR24"
     )
 
     ruta.coords = coordenadas
-    ruta.extrude = 1
+
+    ruta.style.linestyle.width = 4
+    ruta.style.linestyle.color = simplekml.Color.red
+
     ruta.altitudemode = simplekml.AltitudeMode.absolute
 
-    # Estilo visual
-    ruta.style.linestyle.color = simplekml.Color.red
-    ruta.style.linestyle.width = 4
+    ruta.extrude = 1
 
-    # Punto inicial
-    inicio = kml.newpoint(
-        name="Inicio de Traza",
-        coords=[coordenadas[0]]
-    )
+    nombre = "vuelo_fr24.kmz"
 
-    inicio.description = f"""
-    Aeronave: {nombre}
-    HEX: {hex_code.upper()}
-    Fecha UTC: {fecha}
-    """
+    kml.savekmz(nombre)
 
-    # Punto final
-    final = kml.newpoint(
-        name="Fin de Traza",
-        coords=[coordenadas[-1]]
-    )
+    with open(nombre, "rb") as f:
+        data = f.read()
 
-    final.style.iconstyle.color = simplekml.Color.yellow
+    os.remove(nombre)
 
-    nombre_temp = f"temp_{hex_code}.kmz"
+    return data
 
-    kml.savekmz(nombre_temp)
+# ============================================================
+# BOTON
+# ============================================================
 
-    with open(nombre_temp, "rb") as f:
-        kmz_data = f.read()
+if st.button("🚀 Importar vuelo"):
 
-    os.remove(nombre_temp)
+    if not url:
 
-    return kmz_data
-
-
-# =====================================================================
-# INTERFAZ
-# =====================================================================
-
-st.subheader("🔍 Configurar búsqueda")
-
-entrada_original = st.text_input(
-    "Ingresá Matrícula o HEX:",
-    placeholder="Ej: LV-FQZ"
-)
-
-fecha_default = datetime.utcnow() - timedelta(days=1)
-
-fecha_seleccionada = st.date_input(
-    "Seleccioná fecha UTC:",
-    fecha_default
-)
-
-modo_debug = st.checkbox("Mostrar debug técnico")
-
-# =====================================================================
-# BOTÓN PRINCIPAL
-# =====================================================================
-
-if st.button("🚀 Iniciar análisis", type="primary"):
-
-    entrada_usuario = (
-        entrada_original
-        .strip()
-        .lower()
-        .replace(" ", "")
-    )
-
-    if not entrada_usuario:
-
-        st.warning("⚠️ Ingresá una matrícula o código HEX.")
-
+        st.warning("Pegá un link primero.")
         st.stop()
 
-    fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
+    with st.spinner("Abriendo FR24 y buscando trayectoria..."):
 
-    # ---------------------------------------------------------------
-    # LIMPIEZA DE ENTRADA
-    # ---------------------------------------------------------------
+        datos = obtener_datos_vuelo(url)
 
-    if entrada_usuario.startswith("hex"):
-        entrada_limpia = entrada_usuario.replace("hex", "")
-    else:
-        entrada_limpia = entrada_usuario
-
-    # ---------------------------------------------------------------
-    # DETECCIÓN HEX / MATRÍCULA
-    # ---------------------------------------------------------------
-
-    if es_hex_valido(entrada_limpia):
-
-        hex_code = entrada_limpia.lower()
-
-        matricula_pantalla = f"HEX {hex_code.upper()}"
-
-        st.info("🛰️ Búsqueda directa por código HEX.")
-
-    else:
-
-        matricula_limpia = entrada_limpia.replace("-", "")
-
-        st.info(
-            f"🔍 Buscando HEX asociado a matrícula "
-            f"{entrada_usuario.upper()}..."
-        )
-
-        hex_code = obtener_hex_desde_matricula(
-            matricula_limpia
-        )
-
-        matricula_pantalla = entrada_usuario.upper()
-
-    # ---------------------------------------------------------------
-    # VALIDACIÓN HEX
-    # ---------------------------------------------------------------
-
-    if not hex_code:
+    if not datos:
 
         st.error(
-            f"No pudimos encontrar el código HEX "
-            f"para '{matricula_pantalla}'."
+            "No se encontraron datos del replay."
         )
 
         st.stop()
 
     st.success(
-        f"HEX encontrado: {hex_code.upper()}"
+        f"Se capturaron {len(datos)} respuestas JSON."
     )
 
-    # ---------------------------------------------------------------
-    # CONSULTA HISTORIAL
-    # ---------------------------------------------------------------
+    # --------------------------------------------------------
+    # BUSCAR COORDENADAS
+    # --------------------------------------------------------
 
-    dos_primeros = hex_code[:2]
+    coordenadas_totales = []
 
-    url_peticion = (
-        f"{URL_HISTORIAL_BASE}/"
-        f"{fecha_str}/traces/"
-        f"{dos_primeros}/"
-        f"{hex_code}.json"
+    for bloque in datos:
+
+        puntos = buscar_coordenadas(bloque)
+
+        coordenadas_totales.extend(puntos)
+
+    # eliminar duplicados
+    coordenadas_totales = list(
+        dict.fromkeys(coordenadas_totales)
     )
 
-    st.info("📡 Consultando historial ADS-B...")
+    st.info(
+        f"Se encontraron "
+        f"{len(coordenadas_totales)} puntos."
+    )
 
-    try:
-
-        respuesta = session.get(
-            url_peticion,
-            headers=HEADERS,
-            timeout=15
-        )
-
-        # ============================================================
-        # RESPUESTA OK
-        # ============================================================
-
-        if respuesta.status_code == 200:
-
-            datos = respuesta.json()
-
-            trace = datos.get("trace", [])
-
-            if modo_debug:
-
-                st.subheader("DEBUG")
-
-                st.write("URL consultada:")
-                st.code(url_peticion)
-
-                st.write("Primeros puntos recibidos:")
-
-                if len(trace) > 0:
-                    st.json(trace[:5])
-                else:
-                    st.warning("Sin datos trace.")
-
-            # -------------------------------------------------------
-            # VALIDAR TRACE
-            # -------------------------------------------------------
-
-            if not trace or len(trace) < 5:
-
-                st.warning(
-                    "La aeronave no registró suficientes "
-                    "posiciones para generar una traza."
-                )
-
-                st.stop()
-
-            # -------------------------------------------------------
-            # EXTRAER COORDENADAS
-            # -------------------------------------------------------
-
-            coordenadas = extraer_coordenadas(trace)
-
-            if len(coordenadas) < 2:
-
-                st.error(
-                    "No se pudieron procesar coordenadas válidas."
-                )
-
-                st.stop()
-
-            # -------------------------------------------------------
-            # ESTADÍSTICAS
-            # -------------------------------------------------------
-
-            st.success(
-                f"✅ Se detectaron "
-                f"{len(coordenadas)} puntos de vuelo."
-            )
-
-            st.markdown("---")
-
-            st.subheader("📈 Resumen")
-
-            st.metric("Puntos GPS", len(coordenadas))
-
-            altitudes = [c[2] for c in coordenadas]
-
-            alt_max = max(altitudes)
-
-            st.metric(
-                "Altitud máxima",
-                f"{int(alt_max)} m"
-            )
-
-            # -------------------------------------------------------
-            # GENERAR KMZ
-            # -------------------------------------------------------
-
-            with st.spinner("Generando archivo KMZ..."):
-
-                kmz_data = generar_kmz(
-                    coordenadas,
-                    matricula_pantalla,
-                    fecha_str,
-                    hex_code
-                )
-
-            st.success("KMZ generado correctamente.")
-
-            # -------------------------------------------------------
-            # DESCARGA
-            # -------------------------------------------------------
-
-            st.markdown("---")
-
-            st.subheader("💾 Descargar")
-
-            st.download_button(
-                label="📥 Descargar archivo KMZ",
-                data=kmz_data,
-                file_name=(
-                    f"traza_"
-                    f"{matricula_pantalla}_"
-                    f"{fecha_str}.kmz"
-                ),
-                mime="application/vnd.google-earth.kmz"
-            )
-
-            st.balloons()
-
-        # ============================================================
-        # 404
-        # ============================================================
-
-        elif respuesta.status_code == 404:
-
-            st.error(
-                f"No hay registros de vuelo para "
-                f"{matricula_pantalla} "
-                f"en la fecha {fecha_str} UTC."
-            )
-
-        # ============================================================
-        # OTROS ERRORES
-        # ============================================================
-
-        else:
-
-            st.error(
-                f"Error del servidor ADS-B "
-                f"(HTTP {respuesta.status_code})"
-            )
-
-    except requests.exceptions.Timeout:
+    if len(coordenadas_totales) < 2:
 
         st.error(
-            "⏱️ Tiempo de espera agotado."
+            "No hubo suficientes coordenadas."
         )
 
-    except requests.exceptions.ConnectionError:
+        st.stop()
 
-        st.error(
-            "🌐 Error de conexión con ADSB.fi"
+    # --------------------------------------------------------
+    # GENERAR KMZ
+    # --------------------------------------------------------
+
+    with st.spinner("Generando KMZ..."):
+
+        kmz_data = generar_kmz(
+            coordenadas_totales
         )
 
-    except Exception as e:
+    st.success("KMZ generado correctamente.")
 
-        st.error(
-            f"❌ Error inesperado:\n{e}"
+    # --------------------------------------------------------
+    # DESCARGA
+    # --------------------------------------------------------
+
+    st.download_button(
+        label="📥 Descargar KMZ",
+        data=kmz_data,
+        file_name="vuelo_fr24.kmz",
+        mime="application/vnd.google-earth.kmz"
+    )
+
+    # --------------------------------------------------------
+    # DEBUG
+    # --------------------------------------------------------
+
+    with st.expander("DEBUG"):
+
+        st.write("Primeros puntos:")
+
+        st.json(
+            coordenadas_totales[:10]
         )
