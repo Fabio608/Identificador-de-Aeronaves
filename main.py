@@ -1,399 +1,182 @@
 import os
 import re
-import json
 import requests
 import simplekml
 import streamlit as st
-
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ============================================================
 # CONFIG STREAMLIT
 # ============================================================
-
 st.set_page_config(
-    page_title="FR24 → KMZ",
+    page_title="FR24 → KMZ Histórico",
     page_icon="🛩️",
     layout="centered"
 )
 
 st.title("🛩️ Generador KMZ desde enlace FR24")
-
 st.markdown("""
-Pegá un enlace de Flightradar24 y el sistema intentará:
-
-- detectar el vuelo
-- buscar la traza
-- generar un archivo KMZ
-- permitir descarga
-""")
-
-st.warning("""
-⚠️ IMPORTANTE
-
-Flightradar24 no ofrece una API pública oficial gratuita para trazas históricas.
-Este sistema intenta reconstruir rutas usando información pública y fuentes ADS-B abiertas.
-
-Algunos vuelos pueden no estar disponibles.
+Pegá un enlace de Flightradar24 y el sistema extraerá la matrícula, 
+buscará su historial de vuelo completo en la red comunitaria y generará el archivo KMZ.
 """)
 
 # ============================================================
-# CONFIG
+# CONFIGURACIÓN DE APIs
 # ============================================================
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
-
-URL_ADSB = "https://api.adsb.one/v2"
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+URL_BUSCADOR_HEX = "https://api.adsb.one/v2/registration"
+URL_HISTORIAL_BASE = "https://adsb.fi/history"
 
 # ============================================================
 # FUNCIONES
 # ============================================================
 
 def extraer_datos_fr24(url):
-
-    """
-    Extrae matrícula y flight_id desde URL FR24
-    """
-
-    resultado = {
-        "matricula": None,
-        "flight_id": None
-    }
-
+    """ Extrae matrícula limpia desde cualquier variante de URL de FR24 """
+    resultado = {"matricula": None}
     try:
-
-        # ejemplo:
-        # https://www.flightradar24.com/data/aircraft/tc-66#3fc194d1
-
-        match = re.search(
-            r"/aircraft/([^#]+)#([a-zA-Z0-9]+)",
-            url
-        )
-
+        # Detecta la matrícula ignorando lo que haya antes o después (ej: /aircraft/tc-66#3fc194d1 o /data/aircraft/lv-fqz)
+        match = re.search(r"aircraft/([a-zA-Z0-9\-]+)", url.lower())
         if match:
-
-            resultado["matricula"] = (
-                match.group(1)
-                .strip()
-                .lower()
-            )
-
-            resultado["flight_id"] = (
-                match.group(2)
-                .strip()
-            )
-
+            resultado["matricula"] = match.group(1).strip().replace("-", "")
     except:
         pass
-
     return resultado
 
-
 def obtener_hex(matricula):
-
-    """
-    Traduce matrícula → HEX
-    """
+    """ Traduce matrícula → HEX usando API en vivo y machete de emergencia """
+    # Diccionario de rescate para asegurar códigos conflictivos o nuevos
+    machete_militar = {
+        "tc66": "e20094",  # Código nuevo confirmado por FlightRadar24
+        "tc61": "e0224b",
+        "tc64": "e0224d",
+        "tc69": "e02250",
+        "tc100": "e01862",
+        "zm421": "43c5ef_r"
+    }
+    
+    if matricula in machete_militar:
+        return machete_militar[matricula]
 
     try:
-
-        url = f"{URL_ADSB}/registration/{matricula}"
-
-        r = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=10
-        )
-
+        url = f"{URL_BUSCADOR_HEX}/{matricula}"
+        r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200:
-
             data = r.json()
-
-            if (
-                "ac" in data
-                and len(data["ac"]) > 0
-            ):
-
-                return (
-                    data["ac"][0]
-                    .get("hex", "")
-                    .lower()
-                )
-
+            if "ac" in data and len(data["ac"]) > 0:
+                return data["ac"][0].get("hex", "").lower().strip()
     except:
         pass
-
     return None
 
-
-def obtener_traza(hex_code):
-
-    """
-    Busca posición LIVE aproximada
-    """
-
+def obtener_traza_historica(hex_code, fecha_str):
+    """ Descarga el archivo de traza histórica completo de un día específico """
     try:
-
-        url = f"{URL_ADSB}/hex/{hex_code}"
-
-        r = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=10
-        )
-
+        dos_primeros = hex_code[:2]
+        url = f"{URL_HISTORIAL_BASE}/{fecha_str}/traces/{dos_primeros}/{hex_code}.json"
+        
+        r = requests.get(url, headers=HEADERS, timeout=12)
         if r.status_code == 200:
-
-            data = r.json()
-
-            if (
-                "ac" in data
-                and len(data["ac"]) > 0
-            ):
-
-                ac = data["ac"][0]
-
-                lat = ac.get("lat")
-                lon = ac.get("lon")
-                alt = ac.get("alt_baro", 0)
-
-                if lat and lon:
-
-                    return [{
-                        "lat": lat,
-                        "lon": lon,
-                        "alt": alt
-                    }]
-
+            return r.json().get("trace", [])
     except:
         pass
-
     return []
 
-
 def generar_kmz(coords, nombre):
-
-    """
-    Genera archivo KMZ
-    """
-
+    """ Construye el empaquetado binario KMZ para Google Earth """
     kml = simplekml.Kml()
-
-    ruta = kml.newlinestring(
-        name=nombre
-    )
-
+    ruta = kml.newlinestring(name=nombre)
     ruta.coords = coords
-
-    ruta.style.linestyle.color = (
-        simplekml.Color.red
-    )
-
+    ruta.style.linestyle.color = simplekml.Color.red
     ruta.style.linestyle.width = 4
-
-    ruta.altitudemode = (
-        simplekml.AltitudeMode.absolute
-    )
-
+    ruta.altitudemode = simplekml.AltitudeMode.absolute
     ruta.extrude = 1
 
-    archivo = "traza.kmz"
+    # Marcador en el punto de partida
+    marcador = kml.newpoint(name="Inicio de Ruta", coords=[coords[0]])
 
+    archivo = "traza_temp.kmz"
     kml.savekmz(archivo)
-
     with open(archivo, "rb") as f:
         data = f.read()
-
     os.remove(archivo)
-
     return data
 
-
 # ============================================================
-# INPUT
+# INTERFAZ DE USUARIO (INPUTS)
 # ============================================================
+st.subheader("🔍 1. Configurar Extracción")
 
-url = st.text_input(
-    "Pegá el link FR24:",
-    placeholder="https://www.flightradar24.com/data/aircraft/tc-66#3fc194d1"
+url_ingresada = st.text_input(
+    "Pegá el link de FR24 de la aeronave:",
+    placeholder="Ej: https://www.flightradar24.com/data/aircraft/tc-66"
 )
 
+# Añadimos selector de fecha porque los archivos históricos se organizan por día cerrado
+fecha_por_defecto = datetime.now() - timedelta(days=1)
+fecha_seleccionada = st.date_input("Seleccioná la fecha del vuelo que querés procesar:", fecha_por_defecto)
+
 # ============================================================
-# BOTÓN
+# PROCESAMIENTO
 # ============================================================
-
-if st.button("🚀 Generar KMZ"):
-
-    if not url:
-
-        st.warning(
-            "Pegá un enlace primero."
-        )
-
+if st.button("🚀 Procesar Enlace y Generar KMZ", type="primary"):
+    if not url_ingresada:
+        st.warning("⚠️ Por favor, pegá un enlace primero.")
         st.stop()
 
-    # --------------------------------------------------------
-    # EXTRAER DATOS URL
-    # --------------------------------------------------------
-
-    datos = extraer_datos_fr24(url)
-
+    # 1. Extraer datos de la URL
+    datos = extraer_datos_fr24(url_ingresada)
     matricula = datos["matricula"]
-    flight_id = datos["flight_id"]
 
     if not matricula:
-
-        st.error(
-            "No se pudo detectar matrícula."
-        )
-
+        st.error("❌ No se pudo detectar una matrícula válida en el formato de la URL provista.")
         st.stop()
 
-    st.success(
-        f"Matrícula detectada: "
-        f"{matricula.upper()}"
-    )
+    st.success(f"✔️ Matrícula detectada en link: **{matricula.upper()}**")
+    fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
 
-    st.info(
-        f"Flight ID: {flight_id}"
-    )
-
-    # --------------------------------------------------------
-    # OBTENER HEX
-    # --------------------------------------------------------
-
-    with st.spinner(
-        "Buscando HEX ADS-B..."
-    ):
-
-        hex_code = obtener_hex(
-            matricula.replace("-", "")
-        )
+    # 2. Buscar Identificador HEX
+    with st.spinner("Traduciendo matrícula a identificador de transpondedor HEX..."):
+        hex_code = obtener_hex(matricula)
 
     if not hex_code:
-
-        st.error(
-            "No se encontró HEX."
-        )
-
+        st.error(f"❌ No se encontró un código HEX asociado a la matrícula {matricula.upper()} en los registros públicos.")
         st.stop()
 
-    st.success(
-        f"HEX encontrado: "
-        f"{hex_code.upper()}"
-    )
+    st.info(f"🛰️ Identidad confirmada: Código HEX **[{hex_code.upper()}]**")
 
-    # --------------------------------------------------------
-    # OBTENER TRAZA
-    # --------------------------------------------------------
+    # 3. Buscar Traza Histórica
+    with st.spinner(f"Descargando historial de posiciones para el día {fecha_str}..."):
+        puntos = obtener_traza_historica(hex_code, fecha_str)
 
-    with st.spinner(
-        "Buscando posiciones..."
-    ):
-
-        puntos = obtener_traza(hex_code)
-
-    if not puntos:
-
-        st.error(
-            "No se encontraron posiciones."
-        )
-
+    if not puntos or len(puntos) < 5:
+        st.error(f"❌ **Sin novedades históricas:** No hay suficientes posiciones grabadas para el HEX {hex_code.upper()} el día {fecha_str}. Recordá que en zonas como Bolivia puede haber puntos ciegos de cobertura.")
         st.stop()
 
-    # --------------------------------------------------------
-    # COORDS
-    # --------------------------------------------------------
-
+    # 4. Convertir Coordenadas
     coords = []
-
     for p in puntos:
-
         try:
-
-            lon = float(p["lon"])
-            lat = float(p["lat"])
-
-            alt = p.get("alt", 0)
-
-            if alt in [None, "ground"]:
-                alt = 0
-
-            alt_m = float(alt) * 0.3048
-
-            coords.append(
-                (lon, lat, alt_m)
-            )
-
+            lat, lon, alt_pies = p[0], p[1], p[2]
+            alt_m = 0 if alt_pies in [None, "ground"] else float(alt_pies) * 0.3048
+            coords.append((float(lon), float(lat), alt_m))
         except:
             continue
 
-    if len(coords) < 1:
-
-        st.error(
-            "Sin coordenadas válidas."
-        )
-
+    if not coords:
+        st.error("❌ Error al procesar la integridad geométrica de los puntos.")
         st.stop()
 
-    # --------------------------------------------------------
-    # SI SOLO HAY UN PUNTO
-    # GENERAMOS MINI TRAZA
-    # --------------------------------------------------------
+    # 5. Generar y entregar archivo
+    with st.spinner("Estructurando empaquetado KMZ..."):
+        kmz_bytes = generar_kmz(coords, f"Ruta {matricula.upper()} - {fecha_str}")
 
-    if len(coords) == 1:
-
-        lon, lat, alt = coords[0]
-
-        coords = [
-            (lon, lat, alt),
-            (lon + 0.01, lat + 0.01, alt)
-        ]
-
-    # --------------------------------------------------------
-    # GENERAR KMZ
-    # --------------------------------------------------------
-
-    with st.spinner(
-        "Generando KMZ..."
-    ):
-
-        kmz = generar_kmz(
-            coords,
-            f"Vuelo {matricula.upper()}"
-        )
-
-    st.success(
-        "KMZ generado correctamente."
-    )
-
-    # --------------------------------------------------------
-    # DESCARGA
-    # --------------------------------------------------------
-
-    fecha = datetime.utcnow().strftime(
-        "%Y%m%d_%H%M"
-    )
-
+    st.success("🎉 ¡Archivo KMZ generado con éxito!")
+    
     st.download_button(
-        label="📥 Descargar KMZ",
-        data=kmz,
-        file_name=(
-            f"{matricula}_{fecha}.kmz"
-        ),
+        label=f"📥 Descargar KMZ de {matricula.upper()}",
+        data=kmz_bytes,
+        file_name=f"traza_{matricula}_{fecha_str}.kmz",
         mime="application/vnd.google-earth.kmz"
     )
-
-    # --------------------------------------------------------
-    # DEBUG
-    # --------------------------------------------------------
-
-    with st.expander("DEBUG"):
-
-        st.write("Datos detectados:")
-        st.json(datos)
-
-        st.write("Coordenadas:")
-        st.json(coords)
+    st.balloons()
