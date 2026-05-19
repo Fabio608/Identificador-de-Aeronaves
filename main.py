@@ -1,44 +1,44 @@
-elif modulo == "Procesador KMZ":
-    st.subheader("Convertidor a KMZ profesional")
-    archivo = st.file_uploader("Subir archivo CSV de traza:", type=["csv"])
+import requests
+import simplekml
+from io import BytesIO
 
-    if archivo:
-        try:
-            df = pd.read_csv(archivo)
-            lat_cols = [c for c in df.columns if 'lat' in c.lower()]
-            lon_cols = [c for c in df.columns if 'lon' in c.lower()]
-            alt_cols = [c for c in df.columns if 'alt' in c.lower()]
+API_KEY = 'tu_api_key'
+BASE_URL = 'https://api.flightradar24.com/...'  # URL real de la API
 
-            if not lat_cols or not lon_cols or not alt_cols:
-                st.error("No se encontraron columnas con latitud, longitud o altitud en el archivo.")
-            else:
-                lat_col = lat_cols[0]
-                lon_col = lon_cols[0]
-                alt_col = alt_cols[0]
+def obtener_vuelos_por_fecha(matricula, fecha):
+    url = f"{BASE_URL}/flights?registration={matricula}&date={fecha}"
+    headers = {'Authorization': f'Bearer {API_KEY}'}
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()  # lista de vuelos ese día
 
-                coords = []
-                for _, fila in df.iterrows():
-                    lat = float(fila[lat_col])
-                    lon = float(fila[lon_col])
-                    alt = float(fila[alt_col]) * 0.3048  # pies a metros
-                    coords.append((lon, lat, alt))
+def obtener_traza_vuelo(flight_id):
+    url = f"{BASE_URL}/flight/{flight_id}/route"
+    headers = {'Authorization': f'Bearer {API_KEY}'}
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()  # lista de puntos latlonalt
 
-                kml = simplekml.Kml()
-                ruta = kml.newlinestring(name="Traza", coords=coords)
-                ruta.altitudemode = simplekml.AltitudeMode.absolute
-                ruta.extrude = 1
+def crear_kmz(ruta_puntos):
+    kml = simplekml.Kml()
+    coords = [(p['lon'], p['lat'], p['alt']) for p in ruta_puntos]
+    ls = kml.newlinestring(name="Ruta de Vuelo", coords=coords)
+    ls.altitudemode = simplekml.AltitudeMode.absolute
+    ls.extrude = 1
+    kmz_io = BytesIO()
+    kml.savekmz(kmz_io)
+    kmz_io.seek(0)
+    return kmz_io
 
-                kmz_bytes = BytesIO()
-                kml.savekmz(kmz_bytes)
-                kmz_bytes.seek(0)
+# Ejemplo de uso
+matricula = "N12345"
+fecha = "2024-06-12"
 
-                st.download_button(
-                    label="Descargar KMZ generado",
-                    data=kmz_bytes,
-                    file_name="traza_procesada.kmz",
-                    mime="application/vnd.google-earth.kmz"
-                )
-                st.success("¡Archivo listo para Google Earth!")
-        except Exception as e:
-            st.error(f"Error procesando el archivo: {e}")
-            print(f"Error detalle: {e}")
+vuelos = obtener_vuelos_por_fecha(matricula, fecha)
+if vuelos:
+    vuelo_id = vuelos[0]['id']
+    traza = obtener_traza_vuelo(vuelo_id)
+    kmz_file = crear_kmz(traza)
+    # Aquí guardas el archivo o lo envías al usuario
+else:
+    print("No se encontraron vuelos para esa aeronave en esa fecha.")
