@@ -1,52 +1,50 @@
 import streamlit as st
 import pandas as pd
-import requests
 import simplekml
 import os
-from bs4 import BeautifulSoup
 
-# Configuración de página
-st.set_page_config(page_title="Flight Route KMZ Generator", layout="wide")
+# --- 1. CONFIGURACIÓN ---
+st.set_page_config(page_title="Flight Operations Center", layout="wide")
+st.title("🛰️ Flight Operations Center")
 
-st.title("🛰️ Flight Route KMZ Generator")
+# Base de datos local (puedes expandir esto)
+if "mis_aeronaves" not in st.session_state:
+    st.session_state.mis_aeronaves = ["TC-66", "TC-61", "LV-FQZ"]
 
-# Bloque de Auditoría
-with st.container(border=True):
-    st.subheader("🔍 Auditoría de Aeronave")
-    matricula = st.text_input("Ingresá la matrícula (ej: TC-66):")
-    if st.button("Verificar Actividad"):
-        url = f"https://www.flightradar24.com/data/aircraft/{matricula.lower()}"
-        try:
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            soup = BeautifulSoup(r.text, "html.parser")
-            st.success("Conexión exitosa con FR24. Sistema listo para procesar.")
-        except Exception as e:
-            st.error(f"Error de conexión: {e}")
+# --- 2. GESTOR DE SESIÓN ---
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    st.info("Para loguearte: Abre Flightradar24 en tu navegador, inicia sesión y descarga el archivo .CSV de la traza.")
+    st.write("---")
+    nueva_mat = st.text_input("Registrar nueva aeronave:")
+    if st.button("Agregar a la lista"):
+        st.session_state.mis_aeronaves.append(nueva_mat.upper())
 
-# Bloque de Conversión
-with st.container(border=True):
-    st.subheader("🛠️ Procesador de Trazas a KMZ")
-    archivo = st.file_uploader("Subí tu archivo CSV de traza:", type=["csv"])
-    
-    if archivo:
-        if st.button("Convertir a KMZ"):
-            try:
+# --- 3. DASHBOARD DE AERONAVES ---
+st.header("✈️ Mis Aeronaves bajo seguimiento")
+tabs = st.tabs(st.session_state.mis_aeronaves)
+
+for i, tab in enumerate(tabs):
+    with tab:
+        mat = st.session_state.mis_aeronaves[i]
+        st.subheader(f"Auditoría para: {mat}")
+        
+        # Área de carga de archivos (Tu puente con FR24)
+        archivo = st.file_uploader(f"Cargar traza descargada de FR24 para {mat}:", type=["csv"], key=f"uploader_{mat}")
+        
+        if archivo:
+            if st.button(f"Procesar KMZ de {mat}", key=f"btn_{mat}"):
                 df = pd.read_csv(archivo)
                 kml = simplekml.Kml()
                 coords = []
+                
+                # Procesamiento automático
                 for _, f in df.iterrows():
-                    # Ajusta estas columnas según tu CSV
                     coords.append((float(f['Longitude']), float(f['Latitude']), float(f['Altitude']) * 0.3048))
                 
-                ruta = kml.newlinestring(name="Ruta de Vuelo", coords=coords)
-                ruta.altitudemode = simplekml.AltitudeMode.absolute
-                ruta.extrude = 1
+                ruta = kml.newlinestring(name=f"Vuelo {mat}", coords=coords)
+                kml.save(f"{mat}_vuelo.kmz")
                 
-                archivo_salida = "ruta_procesada.kmz"
-                kml.save(archivo_salida)
-                
-                with open(archivo_salida, "rb") as f:
-                    st.download_button("📥 DESCARGAR KMZ", f, archivo_salida)
-                os.remove(archivo_salida)
-            except Exception as e:
-                st.error(f"Error procesando: {e}")
+                with open(f"{mat}_vuelo.kmz", "rb") as f:
+                    st.download_button(f"📥 Descargar KMZ {mat}", f, f"{mat}_vuelo.kmz")
+                os.remove(f"{mat}_vuelo.kmz")
