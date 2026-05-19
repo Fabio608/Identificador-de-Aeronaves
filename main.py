@@ -1,50 +1,41 @@
 import streamlit as st
-import pandas as pd
-import simplekml
-import os
+from datetime import datetime
 
-# --- 1. CONFIGURACIÓN ---
-st.set_page_config(page_title="Flight Operations Center", layout="wide")
-st.title("🛰️ Flight Operations Center")
+# Configuración de página
+st.set_page_config(page_title="Flight Tracker App", layout="centered")
 
-# Base de datos local (puedes expandir esto)
-if "mis_aeronaves" not in st.session_state:
-    st.session_state.mis_aeronaves = ["TC-66", "TC-61", "LV-FQZ"]
+# --- BLOQUE 1: Configuración ---
+with st.container(border=True):
+    col1, col2 = st.columns([0.1, 0.9])
+    with col1:
+        st.write("⚙️") # Icono configuración
+    with col2:
+        st.subheader("Configurar Flightradar24")
+        st.write("Conecta tu cuenta para buscar vuelos reales")
 
-# --- 2. GESTOR DE SESIÓN ---
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    st.info("Para loguearte: Abre Flightradar24 en tu navegador, inicia sesión y descarga el archivo .CSV de la traza.")
-    st.write("---")
-    nueva_mat = st.text_input("Registrar nueva aeronave:")
-    if st.button("Agregar a la lista"):
-        st.session_state.mis_aeronaves.append(nueva_mat.upper())
+# --- BLOQUE 2: Mis Aeronaves ---
+with st.container(border=True):
+    col1, col2 = st.columns([0.1, 0.9])
+    with col1:
+        st.write("✈️") # Icono avión
+    with col2:
+        st.subheader("Mis Aeronaves")
+        st.write("0 aeronaves registradas")
 
-# --- 3. DASHBOARD DE AERONAVES ---
-st.header("✈️ Mis Aeronaves bajo seguimiento")
-tabs = st.tabs(st.session_state.mis_aeronaves)
+# --- BLOQUE 3: Flight Tracker ---
+with st.container(border=True):
+    st.subheader("✈️ Flight Tracker")
+    
+    # Inputs
+    reg = st.text_input("Aircraft Registration", placeholder="e.g., N12345")
+    date = st.date_input("Flight Date", value=None, format="DD/MM/YYYY")
+    
+    # Botón principal
+    search_btn = st.button("🔍 Search Flight", use_container_width=True, type="primary")
 
-for i, tab in enumerate(tabs):
-    with tab:
-        mat = st.session_state.mis_aeronaves[i]
-        st.subheader(f"Auditoría para: {mat}")
-        
-        # Área de carga de archivos (Tu puente con FR24)
-        archivo = st.file_uploader(f"Cargar traza descargada de FR24 para {mat}:", type=["csv"], key=f"uploader_{mat}")
-        
-        if archivo:
-            if st.button(f"Procesar KMZ de {mat}", key=f"btn_{mat}"):
-                df = pd.read_csv(archivo)
-                kml = simplekml.Kml()
-                coords = []
-                
-                # Procesamiento automático
-                for _, f in df.iterrows():
-                    coords.append((float(f['Longitude']), float(f['Latitude']), float(f['Altitude']) * 0.3048))
-                
-                ruta = kml.newlinestring(name=f"Vuelo {mat}", coords=coords)
-                kml.save(f"{mat}_vuelo.kmz")
-                
-                with open(f"{mat}_vuelo.kmz", "rb") as f:
-                    st.download_button(f"📥 Descargar KMZ {mat}", f, f"{mat}_vuelo.kmz")
-                os.remove(f"{mat}_vuelo.kmz")
+# Lógica de respuesta
+if search_btn:
+    if reg and date:
+        st.success(f"Buscando el vuelo {reg} para el día {date}...")
+    else:
+        st.error("Por favor completa ambos campos.")
