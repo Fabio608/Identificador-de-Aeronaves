@@ -1,87 +1,160 @@
+import os
+import re
+import requests
+import pandas as pd
 import streamlit as st
-from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+from datetime import datetime
 
 # ============================================================
 # CONFIG STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="Monitor de Playback FR24",
-    page_icon="🛰️",
-    layout="centered"
+    page_title="Auditor de Actividad FR24",
+    page_icon="📅",
+    layout="wide"
 )
 
-st.title("🛰️ Monitor y Generador de Playback FR24")
+st.title("📅 Auditor de Actividad y Generador de Playback FR24")
 st.markdown("""
-Elegí una aeronave de tu listado de interés o ingresá una nueva, 
-seleccioná la fecha y el sistema te generará los enlaces directos de auditoría.
+Ingresá o seleccioná una aeronave y el sistema escaneará su historial completo reciente 
+para mostrarte **qué días voló, qué rutas hizo** y darte el acceso directo a su Playback.
 """)
 
 # ============================================================
-# BASE DE DATOS LOCAL / LISTADO DE INTERÉS
+# LISTADO DE FAVORITOS
 # ============================================================
-# Acá podés agregar, sacar o editar los aviones que te interesen monitorear siempre
 AERONAVES_INTERES = {
-    "TC-66 (Lockheed C-130H Hércules)": {"tipo": "aircraft", "identificador": "tc-66"},
-    "TC-61 (Lockheed C-130H Hércules)": {"tipo": "aircraft", "identificador": "tc-61"},
-    "LV-FQZ (Boeing 737 Aerolíneas)": {"tipo": "aircraft", "identificador": "lv-fqz"},
-    "Misión FAG29 (Vuelo Bolivia)": {"tipo": "flight", "identificador": "fag29"},
-    "Vuelo ARG1839 (Comodoro - Aeroparque)": {"tipo": "flight", "identificador": "arg1839"}
+    "TC-66 (Lockheed C-130H Hércules)": "tc-66",
+    "TC-61 (Lockheed C-130H Hércules)": "tc-61",
+    "LV-FQZ (Boeing 737 Aerolíneas)": "lv-fqz",
+    "ZM421 (Airbus A400M RAF)": "zm421"
 }
 
 # ============================================================
-# INTERFAZ DE USUARIO
+# INTERFAZ DE USUARIO (PANEL IZQUIERDO)
 # ============================================================
-st.subheader("📌 1. Seleccionar Aeronave o Vuelo")
+st.sidebar.header("🔍 Configuración del Monitoreo")
 
-# Opción de elegir del listado o cargar uno manual
-modo_seleccion = st.radio("Método de búsqueda:", ["Elegir de mi listado de favoritos", "Ingresar uno nuevo manualmente"])
+modo_seleccion = st.sidebar.radio("Objetivo:", ["Mis Favoritos", "Cargar Matrícula Manual"])
 
-if modo_seleccion == "Elegir de mi listado de favoritos":
-    seleccionado = st.selectbox("Seleccioná el objetivo:", list(AERONAVES_INTERES.keys()))
-    tipo_objetivo = AERONAVES_INTERES[seleccionado]["tipo"]
-    id_objetivo = AERONAVES_INTERES[seleccionado]["identificador"]
+if modo_seleccion == "Mis Favoritos":
+    nombre_comun = st.sidebar.selectbox("Seleccioná la aeronave:", list(AERONAVES_INTERES.keys()))
+    matricula = AERONAVES_INTERES[nombre_comun]
 else:
-    tipo_objetivo = st.selectbox("Tipo de identificador:", ["aircraft (Por Matrícula)", "flight (Por Número de Vuelo)"]).split(" ")[0]
-    id_objetivo = st.text_input("Ingresá el identificador (Ej: TC-66 o FAG29):", "").strip().lower().replace(" ", "")
+    matricula = st.sidebar.text_input("Ingresá la matrícula (Ej: TC-66, LV-FQZ):", "").strip().lower().replace(" ", "")
 
-st.subheader("📅 2. Configurar Fecha de Auditoría")
-fecha_por_defecto = datetime.now() - timedelta(days=1)
-fecha_seleccionada = st.date_input("Seleccioná el día del vuelo:", fecha_por_defecto)
+ejecutar = st.sidebar.button("🚀 Escanear Actividad Reciente", type="primary")
 
 # ============================================================
-# CONSTRUCCIÓN DE ENLACES
+# LOGICA DE EXTRACCIÓN (SCRAPING DE FR24)
 # ============================================================
-st.markdown("---")
-st.subheader("🚀 3. Enlaces de Monitoreo Generados")
-
-if id_objetivo:
-    fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
+def escanear_historial_fr24(matricula_avion):
+    url = f"https://www.flightradar24.com/data/aircraft/{matricula_avion}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "es-ES,es;q=0.9"
+    }
     
-    if tipo_objetivo == "aircraft":
-        # Link al historial completo de esa matrícula para buscar el código del playback (#3fc194d1, etc.)
-        url_base = f"https://www.flightradar24.com/data/aircraft/{id_objetivo}"
+    vuelos_encontrados = []
+    
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code == 404:
+            st.error("❌ La matrícula ingresada no existe en los registros de Flightradar24.")
+            return None
+        elif r.status_code != 200:
+            st.error(f"⚠️ FR24 bloqueó la conexión temporalmente (Código {r.status_code}). Intentá de nuevo en unos minutos.")
+            return None
+            
+        soup = BeautifulSoup(r.text, "html.parser")
+        # Buscamos las filas de la tabla de vuelos en el HTML de la página
+        filas_tabla = soup.find_all("tr", class_="data-row")
         
-        st.success(f"🎯 Objetivo: Matrícula **{id_objetivo.upper()}**")
-        st.markdown(f"""
-        Para ver el Playback de la matrícula **{id_objetivo.upper()}** del día **{fecha_str}**:
-        1. Hacé clic en el botón de abajo para ir al historial oficial de la aeronave.
-        2. Buscá la fila del día **{fecha_str}** en la tabla.
-        3. Presioná el botón **'Play'** o **'Playback'** a la derecha de la fila dentro de Flightradar24.
-        """)
+        for fila in filas_tabla:
+            # Extracción de datos columna por columna seguro
+            celdas = fila.find_all("td")
+            if len(celdas) < 9:
+                continue
+                
+            # 1. Fecha
+            fecha_raw = celdas[2].text.strip() if celdas[2] else "Desconocida"
+            
+            # 2. Ruta (Origen -> Destino)
+            origen = celdas[3].text.strip() if celdas[3] else "---"
+            destino = celdas[4].text.strip() if celdas[4] else "---"
+            # Limpieza de textos largos de aeropuertos
+            origen = re.sub(r'\s+', ' ', origen)
+            destino = re.sub(r'\s+', ' ', destino)
+            
+            # 3. Número de Vuelo / Callsign
+            callsign = celdas[5].find("a").text.strip() if celdas[5].find("a") else (celdas[5].text.strip() if celdas[5] else "---")
+            
+            # 4. Estado (Aterrizó, Programado, Desconocido)
+            estado = celdas[8].text.strip() if celdas[8] else "---"
+            estado = re.sub(r'\s+', ' ', estado)
+            
+            # 5. ID de Playback de FR24 (Oculto en el atributo de la fila)
+            flight_id = fila.get("data-playback", None)
+            
+            # Filtrar filas vacías o repetidas que usa FR24 para diseño dinámico
+            if origen == "---" and destino == "---":
+                continue
+                
+            vuelos_encontrados.append({
+                "Fecha": fecha_raw,
+                "Vuelo/Callsign": callsign,
+                "Origen": origen,
+                "Destino": destino,
+                "Estado del Vuelo": estado,
+                "flight_id": flight_id
+            })
+            
+    except Exception as e:
+        st.error(f"❌ Error al conectar con el servidor: {e}")
+        return None
         
-        st.link_button(f"🌐 Abrir Historial de {id_objetivo.upper()} en FR24", url_base, type="primary")
+    return vuelos_encontrados
 
-    elif tipo_objetivo == "flight":
-        # Link directo al historial de la ruta/vuelo
-        url_base = f"https://www.flightradar24.com/data/flights/{id_objetivo}"
+# ============================================================
+# DESPLIEGUE DE RESULTADOS (PANEL CENTRAL)
+# ============================================================
+if ejecutar:
+    if not matricula:
+        st.warning("⚠️ Por favor, ingresá una matrícula válida en el panel izquierdo.")
+    else:
+        st.subheader(f"📊 Reporte de Actividad para: {matricula.upper()}")
         
-        st.success(f"🎯 Objetivo: Vuelo/Callsign **{id_objetivo.upper()}**")
-        st.markdown(f"""
-        Para auditar la ruta del vuelo **{id_objetivo.upper()}**:
-        1. Abrí el enlace del historial de este número de vuelo.
-        2. Buscá el tramo correspondiente al **{fecha_str}** y ejecutá el Playback con tu licencia para descargar el track definitivo.
-        """)
-        
-        st.link_button(f"🌐 Abrir Historial del Vuelo {id_objetivo.upper()} en FR24", url_base, type="primary")
-else:
-    st.info("Configurá los campos de arriba para generar los accesos directos.")
+        with st.spinner(f"Escaneando el historial web de {matricula.upper()}..."):
+            historial = escanear_historial_fr24(matricula)
+            
+        if historial:
+            # Convertimos la lista de datos a un formato de tabla limpio (Pandas Dataframe)
+            df = pd.DataFrame(historial)
+            
+            st.success(f"🚨 ¡Análisis Completo! Se detectaron {len(df)} registros de actividad recientes.")
+            
+            # Mostramos la tabla general resumida para control rápido
+            st.markdown("### 📅 Resumen de movimientos detectados:")
+            st.dataframe(df[["Fecha", "Vuelo/Callsign", "Origen", "Destino", "Estado del Vuelo"]], use_container_width=True)
+            
+            st.markdown("---")
+            st.markdown("### 🚀 Accesos Directos a Playback Confirmados:")
+            st.info("Hacé clic en el botón del día que te interesa. Te abrirá Flightradar24 listo para reproducir y descargar el archivo con tu cuenta.")
+            
+            # Generamos botones dinámicos fila por fila
+            for vuelo in historial:
+                # Si el vuelo tiene un ID de reproducción válido, armamos el acceso directo
+                if vuelo["flight_id"]:
+                    link_playback = f"https://www.flightradar24.com/data/aircraft/{matricula}#{vuelo['flight_id']}"
+                    
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"**🟢 {vuelo['Fecha']}** | Vuelo `{vuelo['Vuelo/Callsign']}` | `{vuelo['Origen']}` ➡️ `{vuelo['Destino']}` ({vuelo['Estado del Vuelo']})")
+                    with col2:
+                        st.link_button(f"🌐 Ver Playback ({vuelo['Fecha']})", link_playback, use_container_width=True)
+                else:
+                    # Vuelos futuros programados que todavía no tienen track de reproducción
+                    st.markdown(f"**⚪ {vuelo['Fecha']}** | Vuelo `{vuelo['Vuelo/Callsign']}` | `{vuelo['Origen']}` ➡️ `{vuelo['Destino']}` (*{vuelo['Estado del Vuelo']}*)")
+        else:
+            st.warning("💤 No se encontraron registros de vuelo recientes para esta aeronave en la sección pública.")
