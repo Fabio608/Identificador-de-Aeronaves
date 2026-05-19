@@ -1,3 +1,19 @@
+import subprocess
+import sys
+
+# Este bloque fuerza la instalación de simplekml si el servidor no la tiene
+try:
+    import simplekml
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "simplekml"])
+    import simplekml
+
+# Ahora sí, el resto de tus librerías normales...
+import os
+import requests
+import streamlit as st
+from datetime import datetime, timedelta
+
 import os
 import json
 import requests
