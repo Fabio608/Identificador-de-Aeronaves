@@ -11,15 +11,15 @@ from datetime import datetime
 # CONFIG STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="Auditor de Actividad FR24",
-    page_icon="📅",
+    page_title="Auditor y Procesador FR24",
+    page_icon="🛰️",
     layout="wide"
 )
 
-st.title("📅 Auditor de Actividad y Generador de Playback FR24")
+st.title("🛰️ Estación de Monitoreo y Procesamiento FR24 ➡️ KMZ")
 st.markdown("""
-Ingresá o seleccioná una aeronave de interés y el sistema escaneará su historial reciente 
-para mostrarte **qué días voló, qué rutas hizo** y darte el acceso directo a su Playback.
+Este panel te permite **auditar la actividad de tus aeronaves de interés** para encontrar los enlaces de Playback exactos en Flightradar24 
+y, a la vez, **procesar y limpiar los archivos descargados** con tu licencia para generar mapas 3D perfectos.
 """)
 
 # ============================================================
@@ -32,121 +32,99 @@ AERONAVES_INTERES = {
     "ZM421 (Airbus A400M RAF)": "zm421"
 }
 
-# ============================================================
-# INTERFAZ DE USUARIO (PANEL IZQUIERDO)
-# ============================================================
-st.sidebar.header("🔍 Configuración del Monitoreo")
-
-modo_seleccion = st.sidebar.radio("Objetivo:", ["Mis Favoritos", "Cargar Matrícula Manual"])
-
-if modo_seleccion == "Mis Favoritos":
-    nombre_comun = st.sidebar.selectbox("Seleccioná la aeronave:", list(AERONAVES_INTERES.keys()))
-    matricula = AERONAVES_INTERES[nombre_comun]
-else:
-    matricula = st.sidebar.text_input("Ingresá la matrícula (Ej: TC-66, LV-FQZ):", "").strip().lower().replace(" ", "")
-
-ejecutar = st.sidebar.button("🚀 Escanear Actividad Reciente", type="primary")
+# Creamos dos pestañas en la interfaz para separar las herramientas
+tab1, tab2 = st.tabs(["🔍 Módulo 1: Auditoría y Enlaces", "🛠️ Módulo 2: Procesador de Archivos (Generar KMZ)"])
 
 # ============================================================
-# LOGICA DE EXTRACCIÓN (SCRAPING DE FR24)
+# PESTAÑA 1: AUDITORÍA Y ENLACES (SCRAPING)
 # ============================================================
-def escanear_historial_fr24(matricula_avion):
-    url = f"https://www.flightradar24.com/data/aircraft/{matricula_avion}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "es-ES,es;q=0.9"
-    }
+with tab1:
+    st.subheader("📋 Buscador de Actividad Reciente")
+    st.markdown("Averiguá qué días registró movimientos la aeronave y obtené los accesos directos al Playback con su ID integrado.")
     
-    vuelos_encontrados = []
+    col_izq, col_der = st.columns([1, 2])
     
-    try:
-        r = requests.get(url, headers=headers, timeout=12)
-        if r.status_code == 404:
-            st.error("❌ La matrícula ingresada no existe en los registros de Flightradar24.")
-            return None
-        elif r.status_code != 200:
-            st.error(f"⚠️ FR24 rechazó la conexión temporalmente (Código {r.status_code}). Intentá de nuevo en unos minutos.")
-            return None
-            
-        soup = BeautifulSoup(r.text, "html.parser")
-        filas_tabla = soup.find_all("tr", class_="data-row")
-        
-        for fila in filas_tabla:
-            celdas = fila.find_all("td")
-            if len(celdas) < 9:
-                continue
-                
-            # 1. Fecha
-            fecha_raw = celdas[2].text.strip() if celdas[2] else "Desconocida"
-            
-            # 2. Ruta (Origen -> Destino)
-            origen = celdas[3].text.strip() if celdas[3] else "---"
-            destino = celdas[4].text.strip() if celdas[4] else "---"
-            origen = re.sub(r'\s+', ' ', origen)
-            destino = re.sub(r'\s+', ' ', destino)
-            
-            # 3. Número de Vuelo / Callsign
-            callsign = celdas[5].find("a").text.strip() if celdas[5].find("a") else (celdas[5].text.strip() if celdas[5] else "---")
-            
-            # 4. Estado
-            estado = celdas[8].text.strip() if celdas[8] else "---"
-            estado = re.sub(r'\s+', ' ', estado)
-            
-            # 5. ID oculto para armar el Playback directo
-            flight_id = fila.get("data-playback", None)
-            
-            if origen == "---" and destino == "---":
-                continue
-                
-            vuelos_encontrados.append({
-                "Fecha": fecha_raw,
-                "Vuelo/Callsign": callsign,
-                "Origen": origen,
-                "Destino": destino,
-                "Estado del Vuelo": estado,
-                "flight_id": flight_id
-            })
-            
-    except Exception as e:
-        st.error(f"❌ Error al conectar con el servidor: {e}")
-        return None
-        
-    return vuelos_encontrados
-
-# ============================================================
-# DESPLIEGUE DE RESULTADOS (PANEL CENTRAL)
-# ============================================================
-if ejecutar:
-    if not matricula:
-        st.warning("⚠️ Por favor, ingresá una matrícula válida en el panel izquierdo.")
-    else:
-        st.subheader(f"📊 Reporte de Actividad para: {matricula.upper()}")
-        
-        with st.spinner(f"Escaneando el historial web de {matricula.upper()}..."):
-            historial = escanear_historial_fr24(matricula)
-            
-        if historial:
-            df = pd.DataFrame(historial)
-            
-            st.success(f"🚨 ¡Análisis Completo! Se detectaron {len(df)} registros de actividad recientes.")
-            
-            st.markdown("### 📅 Resumen de movimientos detectados:")
-            st.dataframe(df[["Fecha", "Vuelo/Callsign", "Origen", "Destino", "Estado del Vuelo"]], use_container_width=True)
-            
-            st.markdown("---")
-            st.markdown("### 🚀 Accesos Directos a Playback Confirmados:")
-            st.info("Hacé clic en el botón del día que te interesa. Te abrirá Flightradar24 listo para reproducir y descargar el track con tu licencia.")
-            
-            for vuelo in historial:
-                if vuelo["flight_id"]:
-                    link_playback = f"https://www.flightradar24.com/data/aircraft/{matricula}#{vuelo['flight_id']}"
-                    
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.markdown(f"**🟢 {vuelo['Fecha']}** | Vuelo `{vuelo['Vuelo/Callsign']}` | `{vuelo['Origen']}` ➡️ `{vuelo['Destino']}` ({vuelo['Estado del Vuelo']})")
-                    with col2:
-                        st.link_button(f"🌐 Ver Playback ({vuelo['Fecha']})", link_playback, use_container_width=True)
-                else:
-                    st.markdown(f"**⚪ {vuelo['Fecha']}** | Vuelo `{vuelo['Vuelo/Callsign']}` | `{vuelo['Origen']}` ➡️ `{vuelo['Destino']}` (*{vuelo['Estado del Vuelo']}*)")
+    with col_izq:
+        modo_seleccion = st.radio("Objetivo de búsqueda:", ["Mis Favoritos", "Cargar Matrícula Manual"], key="modo_auditor")
+        if modo_seleccion == "Mis Favoritos":
+            nombre_comun = st.selectbox("Seleccioná la aeronave:", list(AERONAVES_INTERES.keys()))
+            matricula_auditar = AERONAVES_INTERES[nombre_comun]
         else:
-            st.warning("💤 No se encontraron registros de vuelo recientes para esta aeronave en la sección pública.")
+            matricula_auditar = st.text_input("Ingresá la matrícula (Ej: TC-66):", "").strip().lower().replace(" ", "")
+            
+        ejecutar_escaneo = st.button("🚀 Escanear Actividad", type="primary")
+
+    def escanear_historial_fr24(matricula_avion):
+        url = f"https://www.flightradar24.com/data/aircraft/{matricula_avion}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "es-ES,es;q=0.9"
+        }
+        vuelos_encontrados = []
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            if r.status_code != 200:
+                return None
+            soup = BeautifulSoup(r.text, "html.parser")
+            filas_tabla = soup.find_all("tr", class_="data-row")
+            for fila in filas_tabla:
+                celdas = fila.find_all("td")
+                if len(celdas) < 9:
+                    continue
+                fecha_raw = celdas[2].text.strip() if celdas[2] else "Desconocida"
+                origen = celdas[3].text.strip() if celdas[3] else "---"
+                destino = celdas[4].text.strip() if celdas[4] else "---"
+                origen = re.sub(r'\s+', ' ', origen)
+                destino = re.sub(r'\s+', ' ', destino)
+                callsign = celdas[5].find("a").text.strip() if celdas[5].find("a") else (celdas[5].text.strip() if celdas[5] else "---")
+                estado = celdas[8].text.strip() if celdas[8] else "---"
+                estado = re.sub(r'\s+', ' ', estado)
+                flight_id = fila.get("data-playback", None)
+                if origen == "---" and destino == "---":
+                    continue
+                vuelos_encontrados.append({
+                    "Fecha": fecha_raw,
+                    "Vuelo/Callsign": callsign,
+                    "Origen": origen,
+                    "Destino": destino,
+                    "Estado del Vuelo": estado,
+                    "flight_id": flight_id
+                })
+        except:
+            return None
+        return vuelos_encontrados
+
+    with col_der:
+        if ejecutar_escaneo:
+            if not matricula_auditar:
+                st.warning("⚠️ Ingresá una matrícula válida.")
+            else:
+                with st.spinner("Buscando registros en la red..."):
+                    historial = escanear_historial_fr24(matricula_auditar)
+                if historial:
+                    df = pd.DataFrame(historial)
+                    st.success(f"✔️ Se detectaron {len(df)} movimientos recientes para {matricula_auditar.upper()}.")
+                    st.dataframe(df[["Fecha", "Vuelo/Callsign", "Origen", "Destino", "Estado del Vuelo"]], use_container_width=True)
+                    
+                    st.markdown("#### 🔗 Enlaces directos verificados:")
+                    for vuelo in historial:
+                        if vuelo["flight_id"]:
+                            link_playback = f"https://www.flightradar24.com/data/aircraft/{matricula_auditar}#{vuelo['flight_id']}"
+                            st.markdown(f"🔹 **{vuelo['Fecha']}** ({vuelo['Origen']} ➡️ {vuelo['Destino']}) — [Abrir Playback Oficial en FR24]({link_playback})")
+                else:
+                    st.warning("💤 No se encontraron registros públicos recientes o el servidor rechazó la conexión. Intentá ingresando la matrícula manualmente.")
+
+# ============================================================
+# PESTAÑA 2: PROCESADOR DE ARCHIVOS (GENERADOR KMZ)
+# ============================================================
+with tab2:
+    st.subheader("🛠️ Limpiador y Convertidor Avanzado de Trazas")
+    st.markdown("""
+    Arrastrá el archivo histórico que descargaste desde tu cuenta de Flightradar24 (Acepta formatos **.csv** o **.kml** nativos de FR24). 
+    El script procesará la geometría, corregirá las altitudes y creará un archivo KMZ profesional tridimensional extrusionado.
+    """)
+    
+    archivo_subido = st.file_uploader("Subí tu archivo de track de FR24 aquí:", type=["csv", "kml"])
+    
+    # Selector estético para el color de la línea en Google Earth
+    color_linea = st.selectbox("Seleccioná el color de la traza para Google Earth:",
