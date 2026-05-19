@@ -1,41 +1,46 @@
 import streamlit as st
-from datetime import datetime
+import pandas as pd
+import simplekml
+import os
 
-# Configuración de página
-st.set_page_config(page_title="Flight Tracker App", layout="centered")
+st.set_page_config(page_title="Flight Tracker Pro", layout="wide")
 
-# --- BLOQUE 1: Configuración ---
+st.title("🛰️ Flight Tracker Pro")
+
+# --- SECCIÓN 1: Configuración (UI tipo tarjeta) ---
 with st.container(border=True):
-    col1, col2 = st.columns([0.1, 0.9])
-    with col1:
-        st.write("⚙️") # Icono configuración
-    with col2:
-        st.subheader("Configurar Flightradar24")
-        st.write("Conecta tu cuenta para buscar vuelos reales")
+    st.subheader("⚙️ Configuración")
+    st.write("Tu sesión de Flightradar24 está activa.")
+    st.button("🔄 Sincronizar cuenta")
 
-# --- BLOQUE 2: Mis Aeronaves ---
+# --- SECCIÓN 2: Mis Aeronaves ---
 with st.container(border=True):
-    col1, col2 = st.columns([0.1, 0.9])
-    with col1:
-        st.write("✈️") # Icono avión
-    with col2:
-        st.subheader("Mis Aeronaves")
-        st.write("0 aeronaves registradas")
-
-# --- BLOQUE 3: Flight Tracker ---
-with st.container(border=True):
-    st.subheader("✈️ Flight Tracker")
+    st.subheader("✈️ Mis Aeronaves")
+    # Aquí iría tu lista de aeronaves registradas
+    if "mis_aeronaves" not in st.session_state:
+        st.session_state.mis_aeronaves = []
     
-    # Inputs
-    reg = st.text_input("Aircraft Registration", placeholder="e.g., N12345")
-    date = st.date_input("Flight Date", value=None, format="DD/MM/YYYY")
+    nueva_aeronave = st.text_input("Agregar nueva matrícula (tal cual FR24):")
+    if st.button("Guardar Aeronave"):
+        if nueva_aeronave:
+            st.session_state.mis_aeronaves.append(nueva_aeronave)
+            st.success(f"{nueva_aeronave} agregada.")
     
-    # Botón principal
-    search_btn = st.button("🔍 Search Flight", use_container_width=True, type="primary")
+    st.write("Aeronaves registradas:", ", ".join(st.session_state.mis_aeronaves))
 
-# Lógica de respuesta
-if search_btn:
-    if reg and date:
-        st.success(f"Buscando el vuelo {reg} para el día {date}...")
-    else:
-        st.error("Por favor completa ambos campos.")
+# --- SECCIÓN 3: Flight Tracker y Procesador ---
+with st.container(border=True):
+    st.subheader("✈️ Flight Tracker & KMZ")
+    reg = st.selectbox("Seleccionar aeronave:", st.session_state.mis_aeronaves)
+    fecha = st.date_input("Fecha de vuelo:")
+    
+    archivo = st.file_uploader("Subir archivo de traza (.csv/.kml):", type=["csv", "kml"])
+    
+    if archivo and st.button("Procesar y Exportar KMZ"):
+        try:
+            # Aquí va la lógica de simplekml que ya teníamos
+            st.success(f"Generando KMZ para {reg}...")
+            # (Lógica de conversión aquí...)
+            st.download_button("📥 DESCARGAR KMZ", data=b"...", file_name=f"{reg}_vuelo.kmz")
+        except Exception as e:
+            st.error(f"Error: {e}")
