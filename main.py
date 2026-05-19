@@ -1,57 +1,41 @@
 import streamlit as st
-import pandas as pd
-import simplekml
-import os
+from datetime import datetime
 
-# Configuración del Dashboard
-st.set_page_config(page_title="Flight Route KMZ Generator", layout="wide")
+# Configuración de página
+st.set_page_config(page_title="Flight Tracker App", layout="centered")
 
-st.title("🛰️ Flight Route KMZ Generator")
-st.markdown("---")
+# --- BLOQUE 1: Configuración ---
+with st.container(border=True):
+    col1, col2 = st.columns([0.1, 0.9])
+    with col1:
+        st.write("⚙️") # Icono configuración
+    with col2:
+        st.subheader("Configurar Flightradar24")
+        st.write("Conecta tu cuenta para buscar vuelos reales")
 
-# --- PASO 1: CONFIGURACIÓN Y SELECCIÓN ---
-st.sidebar.header("1. Configuración")
-lista_aeronaves = ["TC-66 (Hércules)", "TC-61 (Hércules)", "LV-FQZ (B737)", "ZM421 (A400M)"]
-aeronave = st.sidebar.selectbox("Seleccionar Aeronave:", lista_aeronaves)
+# --- BLOQUE 2: Mis Aeronaves ---
+with st.container(border=True):
+    col1, col2 = st.columns([0.1, 0.9])
+    with col1:
+        st.write("✈️") # Icono avión
+    with col2:
+        st.subheader("Mis Aeronaves")
+        st.write("0 aeronaves registradas")
 
-# --- PASO 2: PROCESAMIENTO DE DATOS ---
-st.header("2. Carga y Procesamiento")
-archivo = st.file_uploader("Subí el archivo de traza (CSV):", type=["csv"])
-
-if archivo:
-    df = pd.read_csv(archivo)
-    st.write("Datos cargados correctamente:")
-    st.dataframe(df.head())
+# --- BLOQUE 3: Flight Tracker ---
+with st.container(border=True):
+    st.subheader("✈️ Flight Tracker")
     
-    # --- PASO 3: EXPORTACIÓN ---
-    st.header("3. Generar KMZ")
-    if st.button("Convertir a KMZ"):
-        try:
-            # Buscamos columnas de forma inteligente
-            lat_col = next((c for c in df.columns if 'lat' in c.lower()), None)
-            lon_col = next((c for c in df.columns if 'lon' in c.lower()), None)
-            alt_col = next((c for c in df.columns if 'alt' in c.lower()), None)
-            
-            if not all([lat_col, lon_col, alt_col]):
-                st.error("Error: No se encontraron columnas de Lat/Lon/Alt en el CSV.")
-            else:
-                coords = []
-                for _, fila in df.iterrows():
-                    coords.append((float(fila[lon_col]), float(fila[lat_col]), float(fila[alt_col]) * 0.3048))
-                
-                # Crear KML
-                kml = simplekml.Kml()
-                ruta = kml.newlinestring(name=f"Ruta {aeronave}", coords=coords)
-                ruta.altitudemode = simplekml.AltitudeMode.absolute
-                ruta.extrude = 1
-                
-                kml.save("ruta_procesada.kmz")
-                
-                with open("ruta_procesada.kmz", "rb") as f:
-                    st.download_button("📥 DESCARGAR KMZ", f, f"{aeronave.replace(' ', '_')}.kmz")
-                
-                os.remove("ruta_procesada.kmz")
-                st.success("¡Archivo generado con éxito!")
-                
-        except Exception as e:
-            st.error(f"Error procesando el archivo: {e}")
+    # Inputs
+    reg = st.text_input("Aircraft Registration", placeholder="e.g., N12345")
+    date = st.date_input("Flight Date", value=None, format="DD/MM/YYYY")
+    
+    # Botón principal
+    search_btn = st.button("🔍 Search Flight", use_container_width=True, type="primary")
+
+# Lógica de respuesta
+if search_btn:
+    if reg and date:
+        st.success(f"Buscando el vuelo {reg} para el día {date}...")
+    else:
+        st.error("Por favor completa ambos campos.")
