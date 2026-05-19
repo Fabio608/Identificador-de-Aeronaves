@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import pandas as pd
+import simplekml
 import streamlit as st
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -17,7 +18,7 @@ st.set_page_config(
 
 st.title("📅 Auditor de Actividad y Generador de Playback FR24")
 st.markdown("""
-Ingresá o seleccioná una aeronave y el sistema escaneará su historial completo reciente 
+Ingresá o seleccioná una aeronave de interés y el sistema escaneará su historial reciente 
 para mostrarte **qué días voló, qué rutas hizo** y darte el acceso directo a su Playback.
 """)
 
@@ -64,15 +65,13 @@ def escanear_historial_fr24(matricula_avion):
             st.error("❌ La matrícula ingresada no existe en los registros de Flightradar24.")
             return None
         elif r.status_code != 200:
-            st.error(f"⚠️ FR24 bloqueó la conexión temporalmente (Código {r.status_code}). Intentá de nuevo en unos minutos.")
+            st.error(f"⚠️ FR24 rechazó la conexión temporalmente (Código {r.status_code}). Intentá de nuevo en unos minutos.")
             return None
             
         soup = BeautifulSoup(r.text, "html.parser")
-        # Buscamos las filas de la tabla de vuelos en el HTML de la página
         filas_tabla = soup.find_all("tr", class_="data-row")
         
         for fila in filas_tabla:
-            # Extracción de datos columna por columna seguro
             celdas = fila.find_all("td")
             if len(celdas) < 9:
                 continue
@@ -83,21 +82,19 @@ def escanear_historial_fr24(matricula_avion):
             # 2. Ruta (Origen -> Destino)
             origen = celdas[3].text.strip() if celdas[3] else "---"
             destino = celdas[4].text.strip() if celdas[4] else "---"
-            # Limpieza de textos largos de aeropuertos
             origen = re.sub(r'\s+', ' ', origen)
             destino = re.sub(r'\s+', ' ', destino)
             
             # 3. Número de Vuelo / Callsign
             callsign = celdas[5].find("a").text.strip() if celdas[5].find("a") else (celdas[5].text.strip() if celdas[5] else "---")
             
-            # 4. Estado (Aterrizó, Programado, Desconocido)
+            # 4. Estado
             estado = celdas[8].text.strip() if celdas[8] else "---"
             estado = re.sub(r'\s+', ' ', estado)
             
-            # 5. ID de Playback de FR24 (Oculto en el atributo de la fila)
+            # 5. ID oculto para armar el Playback directo
             flight_id = fila.get("data-playback", None)
             
-            # Filtrar filas vacías o repetidas que usa FR24 para diseño dinámico
             if origen == "---" and destino == "---":
                 continue
                 
@@ -129,22 +126,18 @@ if ejecutar:
             historial = escanear_historial_fr24(matricula)
             
         if historial:
-            # Convertimos la lista de datos a un formato de tabla limpio (Pandas Dataframe)
             df = pd.DataFrame(historial)
             
             st.success(f"🚨 ¡Análisis Completo! Se detectaron {len(df)} registros de actividad recientes.")
             
-            # Mostramos la tabla general resumida para control rápido
             st.markdown("### 📅 Resumen de movimientos detectados:")
             st.dataframe(df[["Fecha", "Vuelo/Callsign", "Origen", "Destino", "Estado del Vuelo"]], use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 🚀 Accesos Directos a Playback Confirmados:")
-            st.info("Hacé clic en el botón del día que te interesa. Te abrirá Flightradar24 listo para reproducir y descargar el archivo con tu cuenta.")
+            st.info("Hacé clic en el botón del día que te interesa. Te abrirá Flightradar24 listo para reproducir y descargar el track con tu licencia.")
             
-            # Generamos botones dinámicos fila por fila
             for vuelo in historial:
-                # Si el vuelo tiene un ID de reproducción válido, armamos el acceso directo
                 if vuelo["flight_id"]:
                     link_playback = f"https://www.flightradar24.com/data/aircraft/{matricula}#{vuelo['flight_id']}"
                     
@@ -154,7 +147,6 @@ if ejecutar:
                     with col2:
                         st.link_button(f"🌐 Ver Playback ({vuelo['Fecha']})", link_playback, use_container_width=True)
                 else:
-                    # Vuelos futuros programados que todavía no tienen track de reproducción
                     st.markdown(f"**⚪ {vuelo['Fecha']}** | Vuelo `{vuelo['Vuelo/Callsign']}` | `{vuelo['Origen']}` ➡️ `{vuelo['Destino']}` (*{vuelo['Estado del Vuelo']}*)")
         else:
             st.warning("💤 No se encontraron registros de vuelo recientes para esta aeronave en la sección pública.")
