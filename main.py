@@ -17,10 +17,6 @@ st.set_page_config(
 )
 
 st.title("🛰️ Estación de Monitoreo y Procesamiento FR24 ➡️ KMZ")
-st.markdown("""
-Este panel te permite **auditar la actividad de tus aeronaves de interés** para encontrar los enlaces de Playback exactos en Flightradar24 
-y, a la vez, **procesar y limpiar los archivos descargados** con tu licencia para generar mapas 3D perfectos.
-""")
 
 # ============================================================
 # LISTADO DE FAVORITOS
@@ -32,20 +28,26 @@ AERONAVES_INTERES = {
     "ZM421 (Airbus A400M RAF)": "zm421"
 }
 
-# Creamos dos pestañas en la interfaz para separar las herramientas
-tab1, tab2 = st.tabs(["🔍 Módulo 1: Auditoría y Enlaces", "🛠️ Módulo 2: Procesador de Archivos (Generar KMZ)"])
+# ============================================================
+# NAV BAR LATERAL (Reemplaza a las pestañas bugueadas)
+# ============================================================
+st.sidebar.header("🗺️ Menú de Navegación")
+modulo_activo = st.sidebar.selectbox(
+    "Seleccioná la herramienta:",
+    ["🔍 Módulo 1: Auditoría y Enlaces", "🛠️ Módulo 2: Procesador de Archivos (KMZ)"]
+)
 
 # ============================================================
-# PESTAÑA 1: AUDITORÍA Y ENLACES (SCRAPING)
+# MÓDULO 1: AUDITORÍA Y ENLACES
 # ============================================================
-with tab1:
+if modulo_activo == "🔍 Módulo 1: Auditoría y Enlaces":
     st.subheader("📋 Buscador de Actividad Reciente")
     st.markdown("Averiguá qué días registró movimientos la aeronave y obtené los accesos directos al Playback con su ID integrado.")
     
     col_izq, col_der = st.columns([1, 2])
     
     with col_izq:
-        modo_seleccion = st.radio("Objetivo de búsqueda:", ["Mis Favoritos", "Cargar Matrícula Manual"], key="modo_auditor")
+        modo_seleccion = st.radio("Objetivo de búsqueda:", ["Mis Favoritos", "Cargar Matrícula Manual"])
         if modo_seleccion == "Mis Favoritos":
             nombre_comun = st.selectbox("Seleccioná la aeronave:", list(AERONAVES_INTERES.keys()))
             matricula_auditar = AERONAVES_INTERES[nombre_comun]
@@ -112,19 +114,107 @@ with tab1:
                             link_playback = f"https://www.flightradar24.com/data/aircraft/{matricula_auditar}#{vuelo['flight_id']}"
                             st.markdown(f"🔹 **{vuelo['Fecha']}** ({vuelo['Origen']} ➡️ {vuelo['Destino']}) — [Abrir Playback Oficial en FR24]({link_playback})")
                 else:
-                    st.warning("💤 No se encontraron registros públicos recientes o el servidor rechazó la conexión. Intentá ingresando la matrícula manualmente.")
+                    st.warning("⚠️ No se pudieron recuperar los registros. FR24 puede estar saturado. Intentá de nuevo en unos instantes.")
 
 # ============================================================
-# PESTAÑA 2: PROCESADOR DE ARCHIVOS (GENERADOR KMZ)
+# MÓDULO 2: PROCESADOR DE ARCHIVOS (GENERADOR KMZ)
 # ============================================================
-with tab2:
+elif modulo_activo == "🛠️ Módulo 2: Procesador de Archivos (KMZ)":
     st.subheader("🛠️ Limpiador y Convertidor Avanzado de Trazas")
     st.markdown("""
-    Arrastrá el archivo histórico que descargaste desde tu cuenta de Flightradar24 (Acepta formatos **.csv** o **.kml** nativos de FR24). 
+    Arrastrá el archivo histórico que descargaste desde tu cuenta de Flightradar24 (Soporta formatos **.csv** o **.kml** nativos). 
     El script procesará la geometría, corregirá las altitudes y creará un archivo KMZ profesional tridimensional extrusionado.
     """)
     
     archivo_subido = st.file_uploader("Subí tu archivo de track de FR24 aquí:", type=["csv", "kml"])
     
-    # Selector estético para el color de la línea en Google Earth
-    color_linea = st.selectbox("Seleccioná el color de la traza para Google Earth:",
+    color_linea = st.selectbox("Seleccioná el color de la traza para Google Earth:", ["Rojo Intenso", "Verde Militar", "Azul Aeronáutico", "Amarillo Alerta"])
+    color_map = {
+        "Rojo Intenso": simplekml.Color.red,
+        "Verde Militar": simplekml.Color.green,
+        "Azul Aeronáutico": simplekml.Color.blue,
+        "Amarillo Alerta": simplekml.Color.yellow
+    }
+
+    if archivo_subido is not None:
+        st.info("📦 Archivo recibido. Iniciando ingeniería de datos geométrica...")
+        coords_procesadas = []
+        nombre_archivo = archivo_subido.name
+        
+        try:
+            # CASO A: Archivo CSV
+            if nombre_archivo.endswith(".csv"):
+                df_csv = pd.read_csv(archivo_subido)
+                col_lat = [c for c in df_csv.columns if 'lat' in c.lower() or 'position' in c.lower()][0]
+                col_lon = [c for c in df_csv.columns if 'lon' in c.lower() or 'position' in c.lower()][0]
+                col_alt = [c for c in df_csv.columns if 'alt' in c.lower()][0]
+                
+                for idx, fila in df_csv.iterrows():
+                    try:
+                        if col_lat == col_lon:
+                            lat_val, lon_val = map(float, str(fila[col_lat]).split(','))
+                        else:
+                            lat_val = float(fila[col_lat])
+                            lon_val = float(fila[col_lon])
+                        
+                        alt_pies = fila[col_alt]
+                        alt_m = 0 if str(alt_pies).lower() in ["ground", "none", "nan"] else float(alt_pies) * 0.3048
+                        coords_procesadas.append((lon_val, lat_val, alt_m))
+                    except:
+                        continue
+                        
+            # CASO B: Archivo KML nativo
+            elif nombre_archivo.endswith(".kml"):
+                contenido_kml = archivo_subido.read().decode("utf-8")
+                bloques_coords = re.findall(r"<coordinates>(.*?)</coordinates>", contenido_kml, re.DOTALL)
+                
+                for bloque in bloques_coords:
+                    puntos = bloque.strip().split()
+                    for p in puntos:
+                        try:
+                            partes = p.split(",")
+                            if len(partes) >= 2:
+                                lon_val = float(partes[0])
+                                lat_val = float(partes[1])
+                                alt_original = float(partes[2]) if len(partes) >= 3 else 0
+                                alt_m = alt_original if alt_original > 10000 else alt_original * 0.3048
+                                coords_procesadas.append((lon_val, lat_val, alt_m))
+                        except:
+                            continue
+
+            if len(coords_procesadas) < 2:
+                st.error("❌ El archivo no contiene suficientes puntos geométricos válidos.")
+            else:
+                st.success(f"📊 ¡Éxito! Se procesaron {len(coords_procesadas)} puntos de tracking tridimensional.")
+                
+                with st.spinner("Modelando el espacio aéreo 3D y estructurando el archivo KMZ..."):
+                    kml = simplekml.Kml()
+                    ruta_3d = kml.newlinestring(name=f"Track Procesado - {nombre_archivo}")
+                    ruta_3d.coords = coords_procesadas
+                    ruta_3d.style.linestyle.color = color_map[color_linea]
+                    ruta_3d.style.linestyle.width = 4
+                    ruta_3d.altitudemode = simplekml.AltitudeMode.absolute
+                    ruta_3d.extrude = 1 
+                    
+                    kml.newpoint(name="Punto de Partida", coords=[coords_procesadas[0]])
+                    kml.newpoint(name="Última Posición", coords=[coords_procesadas[-1]])
+                    
+                    archivo_salida = "traza_procesada.kmz"
+                    kml.savekmz(archivo_salida)
+                    
+                    with open(archivo_salida, "rb") as f:
+                        kmz_bytes = f.read()
+                    os.remove(archivo_salida)
+                
+                st.success("🎉 ¡Tu archivo KMZ optimizado para Google Earth Pro está listo!")
+                st.download_button(
+                    label="📥 DESCARGAR KMZ PROCESADO",
+                    data=kmz_bytes,
+                    file_name=f"procesado_{nombre_archivo.split('.')[0]}.kmz",
+                    mime="application/vnd.google-earth.kmz",
+                    type="primary"
+                )
+                st.balloons()
+                
+        except Exception as e:
+            st.error(f"❌ Error al parsear la estructura del archivo: {e}")
