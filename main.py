@@ -1,7 +1,3 @@
-import os
-import re
-import requests
-import simplekml
 import streamlit as st
 from datetime import datetime, timedelta
 
@@ -9,174 +5,83 @@ from datetime import datetime, timedelta
 # CONFIG STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="FR24 → KMZ Histórico",
-    page_icon="🛩️",
+    page_title="Monitor de Playback FR24",
+    page_icon="🛰️",
     layout="centered"
 )
 
-st.title("🛩️ Generador KMZ desde enlace FR24")
+st.title("🛰️ Monitor y Generador de Playback FR24")
 st.markdown("""
-Pegá un enlace de Flightradar24 y el sistema extraerá la matrícula, 
-buscará su historial de vuelo completo en la red comunitaria y generará el archivo KMZ.
+Elegí una aeronave de tu listado de interés o ingresá una nueva, 
+seleccioná la fecha y el sistema te generará los enlaces directos de auditoría.
 """)
 
 # ============================================================
-# CONFIGURACIÓN DE APIs
+# BASE DE DATOS LOCAL / LISTADO DE INTERÉS
 # ============================================================
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-URL_BUSCADOR_HEX = "https://api.adsb.one/v2/registration"
-URL_HISTORIAL_BASE = "https://adsb.fi/history"
-
-# ============================================================
-# FUNCIONES
-# ============================================================
-
-def extraer_datos_fr24(url):
-    """ Extrae matrícula limpia desde cualquier variante de URL de FR24 """
-    resultado = {"matricula": None}
-    try:
-        # Detecta la matrícula ignorando lo que haya antes o después (ej: /aircraft/tc-66#3fc194d1 o /data/aircraft/lv-fqz)
-        match = re.search(r"aircraft/([a-zA-Z0-9\-]+)", url.lower())
-        if match:
-            resultado["matricula"] = match.group(1).strip().replace("-", "")
-    except:
-        pass
-    return resultado
-
-def obtener_hex(matricula):
-    """ Traduce matrícula → HEX usando API en vivo y machete de emergencia """
-    # Diccionario de rescate para asegurar códigos conflictivos o nuevos
-    machete_militar = {
-        "tc66": "e20094",  # Código nuevo confirmado por FlightRadar24
-        "tc61": "e0224b",
-        "tc64": "e0224d",
-        "tc69": "e02250",
-        "tc100": "e01862",
-        "zm421": "43c5ef_r"
-    }
-    
-    if matricula in machete_militar:
-        return machete_militar[matricula]
-
-    try:
-        url = f"{URL_BUSCADOR_HEX}/{matricula}"
-        r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if "ac" in data and len(data["ac"]) > 0:
-                return data["ac"][0].get("hex", "").lower().strip()
-    except:
-        pass
-    return None
-
-def obtener_traza_historica(hex_code, fecha_str):
-    """ Descarga el archivo de traza histórica completo de un día específico """
-    try:
-        dos_primeros = hex_code[:2]
-        url = f"{URL_HISTORIAL_BASE}/{fecha_str}/traces/{dos_primeros}/{hex_code}.json"
-        
-        r = requests.get(url, headers=HEADERS, timeout=12)
-        if r.status_code == 200:
-            return r.json().get("trace", [])
-    except:
-        pass
-    return []
-
-def generar_kmz(coords, nombre):
-    """ Construye el empaquetado binario KMZ para Google Earth """
-    kml = simplekml.Kml()
-    ruta = kml.newlinestring(name=nombre)
-    ruta.coords = coords
-    ruta.style.linestyle.color = simplekml.Color.red
-    ruta.style.linestyle.width = 4
-    ruta.altitudemode = simplekml.AltitudeMode.absolute
-    ruta.extrude = 1
-
-    # Marcador en el punto de partida
-    marcador = kml.newpoint(name="Inicio de Ruta", coords=[coords[0]])
-
-    archivo = "traza_temp.kmz"
-    kml.savekmz(archivo)
-    with open(archivo, "rb") as f:
-        data = f.read()
-    os.remove(archivo)
-    return data
+# Acá podés agregar, sacar o editar los aviones que te interesen monitorear siempre
+AERONAVES_INTERES = {
+    "TC-66 (Lockheed C-130H Hércules)": {"tipo": "aircraft", "identificador": "tc-66"},
+    "TC-61 (Lockheed C-130H Hércules)": {"tipo": "aircraft", "identificador": "tc-61"},
+    "LV-FQZ (Boeing 737 Aerolíneas)": {"tipo": "aircraft", "identificador": "lv-fqz"},
+    "Misión FAG29 (Vuelo Bolivia)": {"tipo": "flight", "identificador": "fag29"},
+    "Vuelo ARG1839 (Comodoro - Aeroparque)": {"tipo": "flight", "identificador": "arg1839"}
+}
 
 # ============================================================
-# INTERFAZ DE USUARIO (INPUTS)
+# INTERFAZ DE USUARIO
 # ============================================================
-st.subheader("🔍 1. Configurar Extracción")
+st.subheader("📌 1. Seleccionar Aeronave o Vuelo")
 
-url_ingresada = st.text_input(
-    "Pegá el link de FR24 de la aeronave:",
-    placeholder="Ej: https://www.flightradar24.com/data/aircraft/tc-66"
-)
+# Opción de elegir del listado o cargar uno manual
+modo_seleccion = st.radio("Método de búsqueda:", ["Elegir de mi listado de favoritos", "Ingresar uno nuevo manualmente"])
 
-# Añadimos selector de fecha porque los archivos históricos se organizan por día cerrado
+if modo_seleccion == "Elegir de mi listado de favoritos":
+    seleccionado = st.selectbox("Seleccioná el objetivo:", list(AERONAVES_INTERES.keys()))
+    tipo_objetivo = AERONAVES_INTERES[seleccionado]["tipo"]
+    id_objetivo = AERONAVES_INTERES[seleccionado]["identificador"]
+else:
+    tipo_objetivo = st.selectbox("Tipo de identificador:", ["aircraft (Por Matrícula)", "flight (Por Número de Vuelo)"]).split(" ")[0]
+    id_objetivo = st.text_input("Ingresá el identificador (Ej: TC-66 o FAG29):", "").strip().lower().replace(" ", "")
+
+st.subheader("📅 2. Configurar Fecha de Auditoría")
 fecha_por_defecto = datetime.now() - timedelta(days=1)
-fecha_seleccionada = st.date_input("Seleccioná la fecha del vuelo que querés procesar:", fecha_por_defecto)
+fecha_seleccionada = st.date_input("Seleccioná el día del vuelo:", fecha_por_defecto)
 
 # ============================================================
-# PROCESAMIENTO
+# CONSTRUCCIÓN DE ENLACES
 # ============================================================
-if st.button("🚀 Procesar Enlace y Generar KMZ", type="primary"):
-    if not url_ingresada:
-        st.warning("⚠️ Por favor, pegá un enlace primero.")
-        st.stop()
+st.markdown("---")
+st.subheader("🚀 3. Enlaces de Monitoreo Generados")
 
-    # 1. Extraer datos de la URL
-    datos = extraer_datos_fr24(url_ingresada)
-    matricula = datos["matricula"]
-
-    if not matricula:
-        st.error("❌ No se pudo detectar una matrícula válida en el formato de la URL provista.")
-        st.stop()
-
-    st.success(f"✔️ Matrícula detectada en link: **{matricula.upper()}**")
+if id_objetivo:
     fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
-
-    # 2. Buscar Identificador HEX
-    with st.spinner("Traduciendo matrícula a identificador de transpondedor HEX..."):
-        hex_code = obtener_hex(matricula)
-
-    if not hex_code:
-        st.error(f"❌ No se encontró un código HEX asociado a la matrícula {matricula.upper()} en los registros públicos.")
-        st.stop()
-
-    st.info(f"🛰️ Identidad confirmada: Código HEX **[{hex_code.upper()}]**")
-
-    # 3. Buscar Traza Histórica
-    with st.spinner(f"Descargando historial de posiciones para el día {fecha_str}..."):
-        puntos = obtener_traza_historica(hex_code, fecha_str)
-
-    if not puntos or len(puntos) < 5:
-        st.error(f"❌ **Sin novedades históricas:** No hay suficientes posiciones grabadas para el HEX {hex_code.upper()} el día {fecha_str}. Recordá que en zonas como Bolivia puede haber puntos ciegos de cobertura.")
-        st.stop()
-
-    # 4. Convertir Coordenadas
-    coords = []
-    for p in puntos:
-        try:
-            lat, lon, alt_pies = p[0], p[1], p[2]
-            alt_m = 0 if alt_pies in [None, "ground"] else float(alt_pies) * 0.3048
-            coords.append((float(lon), float(lat), alt_m))
-        except:
-            continue
-
-    if not coords:
-        st.error("❌ Error al procesar la integridad geométrica de los puntos.")
-        st.stop()
-
-    # 5. Generar y entregar archivo
-    with st.spinner("Estructurando empaquetado KMZ..."):
-        kmz_bytes = generar_kmz(coords, f"Ruta {matricula.upper()} - {fecha_str}")
-
-    st.success("🎉 ¡Archivo KMZ generado con éxito!")
     
-    st.download_button(
-        label=f"📥 Descargar KMZ de {matricula.upper()}",
-        data=kmz_bytes,
-        file_name=f"traza_{matricula}_{fecha_str}.kmz",
-        mime="application/vnd.google-earth.kmz"
-    )
-    st.balloons()
+    if tipo_objetivo == "aircraft":
+        # Link al historial completo de esa matrícula para buscar el código del playback (#3fc194d1, etc.)
+        url_base = f"https://www.flightradar24.com/data/aircraft/{id_objetivo}"
+        
+        st.success(f"🎯 Objetivo: Matrícula **{id_objetivo.upper()}**")
+        st.markdown(f"""
+        Para ver el Playback de la matrícula **{id_objetivo.upper()}** del día **{fecha_str}**:
+        1. Hacé clic en el botón de abajo para ir al historial oficial de la aeronave.
+        2. Buscá la fila del día **{fecha_str}** en la tabla.
+        3. Presioná el botón **'Play'** o **'Playback'** a la derecha de la fila dentro de Flightradar24.
+        """)
+        
+        st.link_button(f"🌐 Abrir Historial de {id_objetivo.upper()} en FR24", url_base, type="primary")
+
+    elif tipo_objetivo == "flight":
+        # Link directo al historial de la ruta/vuelo
+        url_base = f"https://www.flightradar24.com/data/flights/{id_objetivo}"
+        
+        st.success(f"🎯 Objetivo: Vuelo/Callsign **{id_objetivo.upper()}**")
+        st.markdown(f"""
+        Para auditar la ruta del vuelo **{id_objetivo.upper()}**:
+        1. Abrí el enlace del historial de este número de vuelo.
+        2. Buscá el tramo correspondiente al **{fecha_str}** y ejecutá el Playback con tu licencia para descargar el track definitivo.
+        """)
+        
+        st.link_button(f"🌐 Abrir Historial del Vuelo {id_objetivo.upper()} en FR24", url_base, type="primary")
+else:
+    st.info("Configurá los campos de arriba para generar los accesos directos.")
