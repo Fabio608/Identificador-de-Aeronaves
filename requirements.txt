@@ -1,4 +1,6 @@
 streamlit
-firebase-admin
 requests
 simplekml
+pandas
+geopandas
+shapely
