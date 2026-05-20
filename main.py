@@ -1,53 +1,55 @@
 import streamlit as st
-import requests
 import simplekml
 from io import BytesIO
-import time
+import pandas as pd
 
-st.set_page_config(page_title="Flight Tracker", layout="centered")
+st.set_page_config(page_title="Flight Tracker", layout="wide")
 
-st.title("✈️ Flight Tracker Engine")
-st.markdown("---")
+st.title("✈️ Historial de Aeronaves")
 
-# --- Lógica de Generación de KMZ ---
+# --- Base de datos simulada (En el futuro, esto vendrá de OpenSky/Firestore) ---
+# Simulamos que la aeronave 944 realizó 3 vuelos hoy
+vuelos_registrados = [
+    {"id": "Vuelo 1", "fecha": "19/05/2026", "ruta": "SCTI -> SCBA", "coords": [(-45.85, -67.48, 5000), (-45.90, -67.55, 5100)]},
+    {"id": "Vuelo 2", "fecha": "19/05/2026", "ruta": "SCBA -> SCBA", "coords": [(-45.90, -67.55, 5100), (-46.00, -67.60, 5200)]},
+    {"id": "Vuelo 3", "fecha": "19/05/2026", "ruta": "SCBA -> SCTI", "coords": [(-46.00, -67.60, 5200), (-45.85, -67.48, 5000)]}
+]
+
 def generar_kmz(nombre, coordenadas):
     kml = simplekml.Kml()
-    # Simplekml espera (longitud, latitud, altitud)
     coords = [(p[1], p[0], p[2]) for p in coordenadas]
     lin = kml.newlinestring(name=f"Trayectoria {nombre}")
     lin.coords = coords
-    lin.style.linestyle.width = 5
-    lin.style.linestyle.color = 'ff0000ff' # Rojo
-    
     buffer = BytesIO()
     kml.savekmz(buffer)
     buffer.seek(0)
     return buffer
 
-# --- Interfaz Principal ---
-icao_input = st.text_input("ICAO24 (Código hex, ej: e80234)")
-fecha = st.date_input("Fecha del vuelo")
+# --- Interfaz ---
+reg_input = st.text_input("Ingresa Registro (ej: 944)").strip()
 
-if st.button("Buscar Traza Histórica"):
-    if icao_input:
-        st.info(f"Buscando vuelos para {icao_input}...")
-        # AQUÍ ES DONDE LUEGO CONECTAREMOS TU CUENTA DE OPENSKY
-        # Simulación de datos recibidos:
-        mis_coordenadas = [
-            (-45.8, -67.5, 5000), 
-            (-45.9, -67.6, 5100), 
-            (-46.0, -67.7, 5200)
-        ]
+if st.button("Consultar Historial"):
+    if reg_input == "944":
+        st.subheader(f"Resumen de vuelos para Twin Otter FACH (Reg: 944)")
+        st.write(f"Se encontraron **{len(vuelos_registrados)}** vuelos el día 19/05/2026:")
         
-        st.success("¡Datos encontrados!")
-        
-        # Botón de descarga
-        archivo = generar_kmz(icao_input, mis_coordenadas)
-        st.download_button(
-            label="Descargar KMZ",
-            data=archivo,
-            file_name=f"vuelo_{icao_input}.kmz",
-            mime="application/vnd.google-earth.kmz"
-        )
+        # Crear tabla visual
+        for vuelo in vuelos_registrados:
+            col1, col2, col3 = st.columns([2, 2, 1])
+            with col1:
+                st.write(f"**{vuelo['id']}** ({vuelo['fecha']})")
+            with col2:
+                st.write(f"Ruta: {vuelo['ruta']}")
+            with col3:
+                # Botón de descarga para cada vuelo individual
+                archivo = generar_kmz(vuelo['id'], vuelo['coords'])
+                st.download_button(
+                    label="Descargar KMZ",
+                    data=archivo,
+                    file_name=f"vuelo_{vuelo['id']}.kmz",
+                    mime="application/vnd.google-earth.kmz",
+                    key=vuelo['id'] # Llave única para cada botón
+                )
+            st.divider()
     else:
-        st.warning("Por favor ingresa un código ICAO24.")
+        st.error("No se encontraron registros para esa matrícula.")
