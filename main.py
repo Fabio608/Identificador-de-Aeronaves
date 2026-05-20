@@ -1,25 +1,53 @@
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
+import requests
+import simplekml
+from io import BytesIO
+import time
 
-st.title("Debug de la App")
+st.set_page_config(page_title="Flight Tracker", layout="centered")
 
-# 1. Verificar si hay Secretos cargados
-st.write("Verificando Secrets...")
-if "FIREBASE_SERVICE_ACCOUNT" in st.secrets:
-    st.success("✅ FIREBASE_SERVICE_ACCOUNT encontrado")
-    try:
-        cred_dict = dict(st.secrets["FIREBASE_SERVICE_ACCOUNT"])
-        st.write("Configuración de credenciales cargada correctamente.")
+st.title("✈️ Flight Tracker Engine")
+st.markdown("---")
+
+# --- Lógica de Generación de KMZ ---
+def generar_kmz(nombre, coordenadas):
+    kml = simplekml.Kml()
+    # Simplekml espera (longitud, latitud, altitud)
+    coords = [(p[1], p[0], p[2]) for p in coordenadas]
+    lin = kml.newlinestring(name=f"Trayectoria {nombre}")
+    lin.coords = coords
+    lin.style.linestyle.width = 5
+    lin.style.linestyle.color = 'ff0000ff' # Rojo
+    
+    buffer = BytesIO()
+    kml.savekmz(buffer)
+    buffer.seek(0)
+    return buffer
+
+# --- Interfaz Principal ---
+icao_input = st.text_input("ICAO24 (Código hex, ej: e80234)")
+fecha = st.date_input("Fecha del vuelo")
+
+if st.button("Buscar Traza Histórica"):
+    if icao_input:
+        st.info(f"Buscando vuelos para {icao_input}...")
+        # AQUÍ ES DONDE LUEGO CONECTAREMOS TU CUENTA DE OPENSKY
+        # Simulación de datos recibidos:
+        mis_coordenadas = [
+            (-45.8, -67.5, 5000), 
+            (-45.9, -67.6, 5100), 
+            (-46.0, -67.7, 5200)
+        ]
         
-        # 2. Inicializar Firebase
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
-            st.success("✅ Firebase inicializado")
-    except Exception as e:
-        st.error(f"❌ Error al inicializar Firebase: {e}")
-else:
-    st.error("❌ NO se encontró FIREBASE_SERVICE_ACCOUNT en los Secrets. Por favor, revísalos en Settings.")
-
-st.write("Si ves los mensajes en verde, la app está funcionando. Si no, revisa el error arriba.")
+        st.success("¡Datos encontrados!")
+        
+        # Botón de descarga
+        archivo = generar_kmz(icao_input, mis_coordenadas)
+        st.download_button(
+            label="Descargar KMZ",
+            data=archivo,
+            file_name=f"vuelo_{icao_input}.kmz",
+            mime="application/vnd.google-earth.kmz"
+        )
+    else:
+        st.warning("Por favor ingresa un código ICAO24.")
