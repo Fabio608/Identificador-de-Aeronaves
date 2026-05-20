@@ -35,7 +35,6 @@ def buscar_vuelos_opensky(icao24, fecha):
 
 def generar_kmz(nombre, coordenadas):
     kml = simplekml.Kml()
-    # coords esperadas: (lat, lon, alt)
     lin = kml.newlinestring(name=f"Trayectoria {nombre}")
     lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
     buffer = BytesIO()
@@ -75,4 +74,17 @@ if st.button("Buscar"):
                 vuelos = procesar_vuelos(datos['states'])
                 st.success(f"✅ Se encontraron {len(vuelos)} tramos de vuelo.")
                 
-                for i, coords in enumerate(vuelos
+                for i, coords in enumerate(vuelos):
+                    col1, col2 = st.columns([3, 1])
+                    col1.write(f"✈️ Tramo {i+1}: {len(coords)} puntos de datos registrados.")
+                    
+                    archivo = generar_kmz(f"Vuelo_{i+1}", coords)
+                    col2.download_button(
+                        label="Descargar KMZ",
+                        data=archivo,
+                        file_name=f"vuelo_{registro}_{i+1}.kmz",
+                        key=f"dl_{i}"
+                    )
+                    st.divider()
+            else:
+                st.warning("No se encontraron registros para esa aeronave en la fecha seleccionada.")
