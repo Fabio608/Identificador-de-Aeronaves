@@ -7,28 +7,30 @@ from datetime import datetime
 
 st.set_page_config(page_title="Flight Tracker Pro", layout="wide")
 
-# --- Funciones ---
+# --- Función para obtener datos reales ---
 def buscar_vuelos_opensky(icao24, fecha):
+    # Verificación de seguridad de los secretos
+    if "OSN_USER" not in st.secrets or "OSN_PASS" not in st.secrets:
+        st.error("❌ Error: No has configurado 'OSN_USER' o 'OSN_PASS' en los Secrets de Streamlit.")
+        return None
+        
     ts_inicio = int(datetime.combine(fecha, datetime.min.time()).timestamp())
     ts_fin = int(datetime.combine(fecha, datetime.max.time()).timestamp())
     
     url = "https://opensky-network.org/api/states/history"
-    # Autenticación plana (ahora sí funcionará con tus Secrets)
     auth = (st.secrets["OSN_USER"], st.secrets["OSN_PASS"])
     params = {'icao24': icao24, 'begin': ts_inicio, 'end': ts_fin}
     
-    response = requests.get(url, params=params, auth=auth)
-    return response.json() if response.status_code == 200 else None
-
-def generar_kmz(nombre, coordenadas):
-    kml = simplekml.Kml()
-    # coords: [(lon, lat, alt)]
-    lin = kml.newlinestring(name=f"Trayectoria {nombre}")
-    lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
-    buffer = BytesIO()
-    kml.savekmz(buffer)
-    buffer.seek(0)
-    return buffer
+    try:
+        response = requests.get(url, params=params, auth=auth)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.warning(f"La API respondió con código: {response.status_code}. Revisa tus credenciales.")
+            return None
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return None
 
 # --- Interfaz ---
 st.title("✈️ Flight Tracker Pro")
@@ -39,10 +41,7 @@ if st.button("Buscar en OpenSky"):
     if icao_input:
         datos = buscar_vuelos_opensky(icao_input, fecha_input)
         if datos:
-            st.success("Datos recibidos correctamente.")
-            # Aquí procesarías el JSON de la API
-            st.json(datos) # Mostramos el JSON para que verifiques que llega la info
-        else:
-            st.error("No se encontraron datos. Verifica tu usuario/pass en los Secrets.")
+            st.success("✅ Datos recibidos con éxito.")
+            st.json(datos)
     else:
-        st.warning("Ingresa un código ICAO24.")
+        st.warning("Por favor ingresa un código ICAO24.")
