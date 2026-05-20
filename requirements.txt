@@ -1,4 +1,8 @@
-streamlit
-requests
-simplekml
-pandas
+> pyflightradar24
+> streamlit
+> pandas
+> folium
+> ```
+
+Apenas se reinicie la app con ese archivo en GitHub, el error va a desaparecer y va a empezar a conectar con los servidores de Flightradar.
+```</Step></Sequence>
