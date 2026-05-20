@@ -7,13 +7,12 @@ from datetime import datetime
 
 st.set_page_config(page_title="Flight Tracker Pro", layout="wide")
 
-# --- Función para obtener datos reales ---
+# --- Función para obtener datos de OpenSky ---
 def buscar_vuelos_opensky(icao24, fecha):
-    # Verificación de seguridad de los secretos
+    # Verificación de que existen los secretos
     if "OSN_USER" not in st.secrets or "OSN_PASS" not in st.secrets:
-        st.error("❌ Error: No has configurado 'OSN_USER' o 'OSN_PASS' en los Secrets de Streamlit.")
-        return None
-        
+        return "ERROR_SECRETS"
+
     ts_inicio = int(datetime.combine(fecha, datetime.min.time()).timestamp())
     ts_fin = int(datetime.combine(fecha, datetime.max.time()).timestamp())
     
@@ -25,12 +24,20 @@ def buscar_vuelos_opensky(icao24, fecha):
         response = requests.get(url, params=params, auth=auth)
         if response.status_code == 200:
             return response.json()
-        else:
-            st.warning(f"La API respondió con código: {response.status_code}. Revisa tus credenciales.")
-            return None
-    except Exception as e:
-        st.error(f"Error de conexión: {e}")
         return None
+    except:
+        return None
+
+# --- Función para generar KMZ ---
+def generar_kmz(nombre, coordenadas):
+    kml = simplekml.Kml()
+    # coords esperadas: [(lat, lon, alt)]
+    lin = kml.newlinestring(name=f"Trayectoria {nombre}")
+    lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
+    buffer = BytesIO()
+    kml.savekmz(buffer)
+    buffer.seek(0)
+    return buffer
 
 # --- Interfaz ---
 st.title("✈️ Flight Tracker Pro")
@@ -38,10 +45,16 @@ icao_input = st.text_input("Ingresa ICAO24 (ej: e80234)").strip()
 fecha_input = st.date_input("Fecha")
 
 if st.button("Buscar en OpenSky"):
-    if icao_input:
-        datos = buscar_vuelos_opensky(icao_input, fecha_input)
-        if datos:
-            st.success("✅ Datos recibidos con éxito.")
-            st.json(datos)
+    if not icao_input:
+        st.warning("Por favor ingresa un ICAO24.")
     else:
-        st.warning("Por favor ingresa un código ICAO24.")
+        with st.spinner('Consultando OpenSky...'):
+            resultado = buscar_vuelos_opensky(icao_input, fecha_input)
+            
+            if resultado == "ERROR_SECRETS":
+                st.error("Configuración incorrecta: No se encuentran los datos de acceso en los Secrets.")
+            elif resultado:
+                st.success("¡Datos recuperados!")
+                st.write("JSON recibido:", resultado) # Aquí verás los datos reales
+            else:
+                st.error("No se encontraron registros o error en la consulta.")
