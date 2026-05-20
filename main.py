@@ -1,85 +1,164 @@
-import gzip
-import os
+import streamlit as st
+import requests
+import simplekml
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point
+from io import BytesIO
+from datetime import datetime
 
-def procesar_opensky_a_gpkg(ruta_csv_gz, icao24_buscado, ruta_salida_gpkg):
+# --- CONFIGURACIÓN DE LA PÁGINA ---
+st.set_page_config(page_title="Flight Tracker Pro", layout="wide", page_icon="✈️")
+
+# --- BASE DE DATOS DE AERONAVES ---
+# Asegúrate de colocar los códigos ICAO de 24 bits (hexadecimal) correctos.
+AIRCRAFT_DB = {
+    "944": "e80234",      # Ejemplo de ICAO Hex para la unidad buscada
+    "VP-FAZ": "e80999",
+    "CC-ABC": "e80111"
+}
+
+# --- FUNCIONES DE TELEMETRÍA ---
+def buscar_trayectorias_opensky(icao24, fecha):
     """
-    Lee un archivo masivo de OpenSky (.csv.gz), filtra por un ICAO24 específico
-    y exporta los puntos ordenados cronológicamente a un GeoPackage listo para QGIS.
+    Consulta la API de OpenSky. Primero busca los tramos de vuelo del día
+    y luego descarga la telemetría detallada de cada tramo detectado.
     """
-    print(f"⏳ Abriendo y filtrando el archivo masivo para el ICAO24: {icao24_buscado}...")
+    if "OSN_USER" not in st.secrets or "OSN_PASS" not in st.secrets:
+        return "ERROR_SECRETS"
     
-    # 1. Definimos las columnas estándar de los State Vectors de OpenSky
-    # Nota: Ajusta los nombres si el dataset mensual varía levemente de estructura
-    columnas = [
-        'time', 'icao24', 'lat', 'lon', 'velocity', 'heading', 'vertrate', 
-        'callsign', 'onground', 'alert', 'spi', 'squawk', 'baroaltitude', 
-        'geoaltitude', 'lastposupdate', 'lastcontact'
-    ]
+    # Convertimos la fecha elegida a Timestamps de Unix (inicio y fin del día)
+    ts_inicio = int(datetime.combine(fecha, datetime.min.time()).timestamp())
+    ts_fin = int(datetime.combine(fecha, datetime.max.time()).timestamp())
     
-    chunks_filtrados = []
+    auth = (st.secrets["OSN_USER"], st.secrets["OSN_PASS"])
     
-    # 2. Leemos por fragmentos (chunks) para no saturar la memoria RAM
-    tamanio_chunk = 500_000
+    # Paso 1: Obtener la lista de vuelos/tramos que hizo el avión ese día
+    url_flights = "https://opensky-network.org/api/flights/aircraft"
+    params_flights = {'icao24': icao24, 'begin': ts_inicio, 'end': ts_fin}
+    
     try:
-        for chunk in pd.read_csv(ruta_csv_gz, names=columnas, compression='gzip', chunksize=tamanio_chunk, low_memory=False):
-            # Filtramos inmediatamente el fragmento por el avión que nos interesa
-            df_filtro = chunk[chunk['icao24'].str.lower() == icao24_buscado.lower()]
-            if not df_filtro.empty:
-                chunks_filtrados.append(df_filtro)
-                
-        if not chunks_filtrados:
-            print(f"❌ No se encontraron registros para el ICAO24 '{icao24_buscado}' en este archivo.")
-            return
+        res_flights = requests.get(url_flights, params=params_flights, auth=auth)
+        if res_flights.status_code != 200:
+            return None
+        
+        vuelos = res_flights.json()
+        if not vuelos:
+            return []
             
-        # Concatonamos todos los fragmentos encontrados
-        df_resultado = pd.concat(chunks_filtrados, ignore_index=True)
+        tramos_procesados = []
         
-        # 3. Limpieza y Ordenamiento
-        print("🧹 Limpiando y ordenando datos cronológicamente...")
-        # Eliminamos registros que no tengan coordenadas válidas
-        df_resultado = df_resultado.dropna(subset=['lat', 'lon'])
-        # Ordenamos por la marca de tiempo (Unix Timestamp)
-        df_resultado = df_resultado.sort_values(by='time')
-        
-        # Convertimos el timestamp de Unix a una fecha legible por humanos para QGIS
-        df_resultado['fecha_hora'] = pd.to_datetime(df_resultado['time'], unit='s')
-        
-        # 4. Conversión a datos Geoespaciales (GeoPandas)
-        print("🗺️ Creando geometrías 3D (Lat, Lon, Altitud)...")
-        # Rellenamos altitudes nulas con 0 para que no falle la geometría 3D
-        df_resultado['baroaltitude'] = df_resultado['baroaltitude'].fillna(0)
-        
-        # Creamos los puntos geométricos incluyendo la coordenada Z (Altitud)
-        geometria = [
-            Point(xy[0], xy[1], z) 
-            for xy, z in zip(zip(df_resultado['lon'], df_resultado['lat']), df_resultado['baroaltitude'])
-        ]
-        
-        # Creamos el GeoDataFrame especificando el sistema WGS 84 (EPSG:4326)
-        gdf = gpd.GeoDataFrame(df_resultado, geometry=geometria, crs="EPSG:4326")
-        
-        # Eliminamos la columna 'time' original o la dejamos como entero para evitar conflictos de tipos
-        gdf['time'] = gdf['time'].astype(int)
-        # Convertimos fecha_hora a string para máxima compatibilidad al guardar en GPKG
-        gdf['fecha_hora'] = gdf['fecha_hora'].dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # 5. Exportación
-        print(f"💾 Guardando {len(gdf)} puntos en: {ruta_salida_gpkg}...")
-        gdf.to_file(ruta_salida_gpkg, layer='puntos_vuelo', driver="GPKG")
-        print("🚀 ¡Proceso completado con éxito! Ya podés arrastrar el archivo a QGIS.")
-        
-    except Exception as e:
-        print(f"❌ Ocurrió un error durante el procesamiento: {e}")
+        # Paso 2: Para cada tramo de vuelo, pedir el "track" de puntos detallado
+        for f in vuelos:
+            url_track = "https://opensky-network.org/api/tracks/all"
+            params_track = {'icao24': icao24, 'time': f['firstSeen']}
+            res_track = requests.get(url_track, params=params_track, auth=auth)
+            
+            if res_track.status_code == 200:
+                track_data = res_track.json()
+                coords = []
+                
+                # El "path" de OpenSky es una lista de listas con este formato:
+                # [time, latitude, longitude, baro_altitude, true_track, on_ground]
+                for p in track_data.get('path', []):
+                    lat, lon, alt = p[1], p[2], p[3]
+                    if lat is not None and lon is not None:
+                        alt = alt if alt is not None else 0  # Reemplaza nulos por altitud 0
+                        coords.append((lat, lon, alt))
+                
+                if coords:
+                    tramos_procesados.append({
+                        "origen": f.get("estDepartureAirport") or "Desconocido",
+                        "destino": f.get("estArrivalAirport") or "Desconocido",
+                        "coordenadas": coords
+                    })
+        return tramos_procesados
+    except:
+        return None
 
-# --- EJECUCIÓN DEL SCRIPT ---
-if __name__ == "__main__":
-    # CONFIGURA TUS RUTAS AQUÍ:
-    RUTA_ENTRADA = "datos_opensky_del_dia.csv.gz"  # Archivo original bajado de OpenSky
-    ICAO24_AVION = "e80234"                        # El código HEX de la aeronave
-    RUTA_SALIDA = "trayectoria_fach_944.gpkg"       # El archivo que vas a abrir en QGIS
+def generar_kmz(nombre, coordenadas):
+    """
+    Genera un archivo KMZ compatible con QGIS y Google Earth Pro 
+    manteniendo las propiedades 3D de la trayectoria.
+    """
+    kml = simplekml.Kml()
+    lin = kml.newlinestring(name=f"Trayectoria {nombre}")
     
-    # Ejecutar
-    procesar_opensky_a_gpkg(RUTA_ENTRADA, ICAO24_AVION, RUTA_SALIDA)
+    # IMPORTANTE: simplekml requiere estrictamente el orden (Longitud, Latitud, Altitud)
+    lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
+    
+    # Configuración estética básica para identificarlo fácil en QGIS
+    lin.style.linestyle.color = "ff0000ff"  # Rojo en formato hexadecimal KML (AABBGGRR)
+    lin.style.linestyle.width = 3
+    
+    # Habilitamos que interprete la altitud respecto al nivel del mar
+    lin.altitudemode = simplekml.AltitudeMode.absolute
+    
+    buffer = BytesIO()
+    kml.savekmz(buffer)
+    buffer.seek(0)
+    return buffer
+
+# --- INTERFAZ DE USUARIO (STREAMLIT) ---
+st.title("✈️ Flight Tracker Pro: Extractor GIS de Trayectorias")
+st.markdown("Busca el historial de vuelos diarios de una aeronave y descarga los vectores estructurados en formato KMZ para mapear en QGIS.")
+
+# Panel de inputs usando columnas para mejorar el diseño
+col_input1, col_input2 = st.columns(2)
+with col_input1:
+    registro = st.text_input("Ingresa el Registro / Matrícula interna (ej: 944)").strip().upper()
+with col_input2:
+    fecha = st.date_input("Selecciona la Fecha de Análisis", value=datetime.today())
+
+st.markdown("---")
+
+if st.button("🔍 Buscar Historial de Vuelo", type="primary"):
+    if not registro:
+        st.warning("Por favor, ingresa una matrícula para iniciar la búsqueda.")
+    else:
+        # Obtenemos el código ICAO hexadecimal asociado a la matrícula en nuestro diccionario
+        icao24 = AIRCRAFT_DB.get(registro)
+        
+        if not icao24:
+            st.error(f"❌ La matrícula '{registro}' no está registrada en el diccionario `AIRCRAFT_DB` en el código. Agrégala al inicio del script para poder buscarla.")
+        else:
+            with st.spinner('Conectando con OpenSky Network y descargando coordenadas aeronáuticas...'):
+                vuelos = buscar_trayectorias_opensky(icao24, fecha)
+                
+                if vuelos == "ERROR_SECRETS":
+                    st.error("❌ Error de configuración: Faltan las credenciales `OSN_USER` y `OSN_PASS` en los Secrets de tu cuenta de Streamlit.")
+                
+                elif vuelos is None:
+                    st.error("❌ No se pudo establecer conexión con los servidores de OpenSky. Revisa tus credenciales o el estado de la API.")
+                
+                elif len(vuelos) == 0:
+                    st.warning(f"⚠️ No se encontraron registros de telemetría o tracks de radar para la aeronave (ICAO24: {icao24}) en la fecha seleccionada ({fecha}).")
+                
+                else:
+                    st.success(f"✅ ¡Éxito! Se encontraron {len(vuelos)} tramos de vuelo independientes para el día seleccionado.")
+                    
+                    # Desplegamos los tramos encontrados para descarga masiva individual
+                    for i, vuelo in enumerate(vuelos):
+                        orig = vuelo["origen"]
+                        dest = vuelo["destino"]
+                        puntos = len(vuelo["coordenadas"])
+                        
+                        # Caja visual para cada tramo de la ruta
+                        with st.container():
+                            col_info, col_dl = st.columns([3, 1])
+                            
+                            with col_info:
+                                st.markdown(f"### ✈️ Tramo {i+1}")
+                                st.write(f"**Ruta estimada:** `{orig}` ➔ `{dest}`")
+                                st.write(f"**Puntos de posición registrados (Pings de radar):** {puntos}")
+                            
+                            with col_dl:
+                                # Generamos el archivo binario KMZ en memoria
+                                archivo_kmz = generar_kmz(f"Vuelo_{registro}_Tramo_{i+1}", vuelo["coordenadas"])
+                                
+                                st.download_button(
+                                    label="💾 Descargar KMZ",
+                                    data=archivo_kmz,
+                                    file_name=f"vuelo_{registro}_tramo_{i+1}_{fecha}.kmz",
+                                    mime="application/vnd.google-earth.kmz",
+                                    key=f"btn_dl_{i}"
+                                )
+                            st.markdown("---")
