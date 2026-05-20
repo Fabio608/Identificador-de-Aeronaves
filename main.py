@@ -1,66 +1,52 @@
-import requests
-import time
-import datetime
-import simplekml
-from pathlib import Path
+import streamlit as st
+from FlightRadar24 import FlightRadar24API
 
-# ================= CONFIGURACIÓN =================
-ICAO = "4064d5"          # ICAO hex del avión (ej: ZM415 del A400M)
-CALLSIGN = "EMPEROR"     # Opcional
-DURACION_MINUTOS = 120   # Cuánto tiempo rastrear
-INTERVALO_SEGUNDOS = 5   # Cada cuántos segundos pedir datos
+# 1. Inicializar la API y la memoria de la aplicación
+fr_api = FlightRadar24API()
 
-# ================================================
+if "trayectoria_lista" not in st.session_state:
+    st.session_state.trayectoria_lista = None
 
-positions = []
-start_time = time.time()
+st.title("🗺️ Buscador de Trayectorias")
 
-print(f"🛫 Iniciando rastreo del avión {CALLSIGN} ({ICAO})...")
+# 2. Zona de Inputs (Formulario seguro)
+# Usar un form agrupa los elementos y evita que la app intente recargarse a mitad de escritura
+with st.form(key="buscador_vuelo"):
+    codigo_vuelo = st.text_input("Código de vuelo (ej. AR1300):")
+    boton_buscar = st.form_submit_button(label="Buscar Trayectoria")
 
-while (time.time() - start_time) < DURACION_MINUTOS * 60:
-    try:
-        response = requests.get(
-            f"https://opensky-network.org/api/states/all?icao24={ICAO.lower()}"
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data['states']:
-                state = data['states'][0]
-                # [0=icao, 5=lat, 6=lon, 7=baro_altitude, 8=velocity, 9=true_track, 10=vertical_rate]
-                lat = state[6]
-                lon = state[5]
-                alt = state[7]
-                speed = state[8]
-                heading = state[9]
+# 3. Zona de Procesamiento (Solo guarda datos, no dibuja nada complejo aún)
+if boton_buscar and codigo_vuelo:
+    with st.spinner("Conectando con el playback de Flightradar24..."):
+        try:
+            # Reemplazá esto por tu lógica real de búsqueda de vuelos
+            vuelos = fr_api.get_flights(aircraft_type=codigo_vuelo) 
+            
+            if vuelos:
+                # Simulamos que tomamos el primer vuelo encontrado para extraer su trail
+                detalles = fr_api.get_flight_details(vuelos[0].id)
                 
-                if lat and lon:
-                    positions.append((lat, lon, alt or 0, heading or 0))
-                    print(f"📍 {len(positions)} puntos → Lat: {lat}, Lon: {lon}, Alt: {alt}m")
-    except:
-        pass
+                # Guardamos los datos puros en la memoria de la sesión
+                st.session_state.trayectoria_lista = detalles.get('trail', [])
+            else:
+                st.warning("No se encontraron vuelos históricos recientes con ese código.")
+                st.session_state.trayectoria_lista = None
+        except Exception as e:
+            st.error(f"Error de conexión: {e}")
+
+---
+
+# 4. Zona de Renderizado Seguro (Fuera del botón, libre de glitches de JavaScript)
+if st.session_state.trayectoria_lista:
+    st.success("¡Datos recuperados con éxito!")
     
-    time.sleep(INTERVALO_SEGUNDOS)
-
-# ================= GENERAR KMZ =================
-kml = simplekml.Kml()
-
-# Línea del recorrido
-linestring = kml.newlinestring(name=f"{CALLSIGN} - Track")
-linestring.coords = [(lon, lat, alt) for lat, lon, alt, _ in positions]
-linestring.altitudemode = simplekml.AltitudeMode.absolute
-linestring.extrude = 1
-linestring.tessellate = 1
-linestring.style.linestyle.color = simplekml.Color.red
-linestring.style.linestring.width = 4
-
-# Icono del avión al final
-if positions:
-    pnt = kml.newpoint(name=CALLSIGN, coords=[(positions[-1][1], positions[-1][0], positions[-1][2])])
-    pnt.style.iconstyle.icon.href = "http://maps.google.com/mapfiles/kml/shapes/airports.png"
-
-# Guardar
-fecha = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-archivo = f"{CALLSIGN}_{fecha}.kmz"
-kml.save(archivo)
-print(f"✅ Archivo guardado: {archivo}")
+    # Extraemos las coordenadas de manera limpia
+    latitudes = [punto['lat'] for punto in st.session_state.trayectoria_lista]
+    longitudes = [punto['lng'] for punto in st.session_state.trayectoria_lista]
+    
+    # Dibujamos de forma nativa y segura
+    import pandas as pd
+    df_mapa = pd.DataFrame({'lat': latitudes, 'lon': longitudes})
+    
+    st.subheader("Visualización del trayecto")
+    st.map(df_mapa)
