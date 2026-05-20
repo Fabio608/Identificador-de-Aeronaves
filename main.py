@@ -1,60 +1,51 @@
 import streamlit as st
-import requests
-import simplekml
 import pandas as pd
-from io import BytesIO
-from datetime import datetime
+# ... (mantén tus otros imports y funciones)
 
-st.set_page_config(page_title="Flight Tracker Pro", layout="wide")
-
-# --- Función para obtener datos de OpenSky ---
-def buscar_vuelos_opensky(icao24, fecha):
-    # Verificación de que existen los secretos
-    if "OSN_USER" not in st.secrets or "OSN_PASS" not in st.secrets:
-        return "ERROR_SECRETS"
-
-    ts_inicio = int(datetime.combine(fecha, datetime.min.time()).timestamp())
-    ts_fin = int(datetime.combine(fecha, datetime.max.time()).timestamp())
+def procesar_vuelos(states):
+    """
+    Toma la lista de estados y los agrupa en vuelos basados en pausas de tiempo.
+    """
+    if not states:
+        return []
     
-    url = "https://opensky-network.org/api/states/history"
-    auth = (st.secrets["OSN_USER"], st.secrets["OSN_PASS"])
-    params = {'icao24': icao24, 'begin': ts_inicio, 'end': ts_fin}
+    # Convertimos a DataFrame para facilitar el análisis
+    df = pd.DataFrame(states, columns=['icao24', 'callsign', 'origin_country', 'time_position', 
+                                       'last_contact', 'longitude', 'latitude', 'baro_altitude', 
+                                       'on_ground', 'velocity', 'true_track', 'vertical_rate', 
+                                       'sensors', 'geo_altitude', 'squawk', 'spi', 'position_source'])
     
-    try:
-        response = requests.get(url, params=params, auth=auth)
-        if response.status_code == 200:
-            return response.json()
-        return None
-    except:
-        return None
+    # Ordenamos por tiempo
+    df = df.sort_values(by='time_position')
+    
+    # Detectamos pausas: si la diferencia entre un dato y otro es > 1800 seg (30 min)
+    df['pausa'] = df['time_position'].diff() > 1800
+    df['num_vuelo'] = df['pausa'].cumsum()
+    
+    vuelos = []
+    for num, group in df.groupby('num_vuelo'):
+        vuelos.append(group[['latitude', 'longitude', 'baro_altitude']].values.tolist())
+    
+    return vuelos
 
-# --- Función para generar KMZ ---
-def generar_kmz(nombre, coordenadas):
-    kml = simplekml.Kml()
-    # coords esperadas: [(lat, lon, alt)]
-    lin = kml.newlinestring(name=f"Trayectoria {nombre}")
-    lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
-    buffer = BytesIO()
-    kml.savekmz(buffer)
-    buffer.seek(0)
-    return buffer
-
-# --- Interfaz ---
-st.title("✈️ Flight Tracker Pro")
-icao_input = st.text_input("Ingresa ICAO24 (ej: e80234)").strip()
-fecha_input = st.date_input("Fecha")
-
+# --- Dentro de tu botón "Buscar en OpenSky" ---
 if st.button("Buscar en OpenSky"):
-    if not icao_input:
-        st.warning("Por favor ingresa un ICAO24.")
-    else:
-        with st.spinner('Consultando OpenSky...'):
-            resultado = buscar_vuelos_opensky(icao_input, fecha_input)
-            
-            if resultado == "ERROR_SECRETS":
-                st.error("Configuración incorrecta: No se encuentran los datos de acceso en los Secrets.")
-            elif resultado:
-                st.success("¡Datos recuperados!")
-                st.write("JSON recibido:", resultado) # Aquí verás los datos reales
-            else:
-                st.error("No se encontraron registros o error en la consulta.")
+    # ... (tu llamada a buscar_vuelos_opensky)
+    
+    if resultado and 'states' in resultado and resultado['states']:
+        lista_vuelos = procesar_vuelos(resultado['states'])
+        st.success(f"✅ Se detectaron {len(lista_vuelos)} vuelos distintos.")
+        
+        for idx, coords in enumerate(lista_vuelos):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.write(f"✈️ Vuelo {idx + 1}: {len(coords)} puntos de traza registrados.")
+            with col2:
+                archivo = generar_kmz(f"Vuelo_{idx+1}", coords)
+                st.download_button(
+                    label="Descargar KMZ",
+                    data=archivo,
+                    file_name=f"vuelo_{idx+1}.kmz",
+                    key=f"dl_{idx}"
+                )
+            st.divider()
