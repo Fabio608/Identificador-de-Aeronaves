@@ -8,10 +8,10 @@ from datetime import datetime
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Flight Tracker Pro", layout="wide")
 
-# --- BASE DE DATOS DE AERONAVES (AQUÍ AGREGAS TUS AVIONES) ---
+# --- BASE DE DATOS (Agrega aquí tus aviones) ---
 AIRCRAFT_DB = {
-    "944": "e80234", # Twin Otter FACH
-    "VP-FAZ": "e80999", 
+    "944": "e80234",
+    "VP-FAZ": "e80999",
     "CC-ABC": "e80111"
 }
 
@@ -35,6 +35,7 @@ def buscar_vuelos_opensky(icao24, fecha):
 
 def generar_kmz(nombre, coordenadas):
     kml = simplekml.Kml()
+    # coords esperadas: (lat, lon, alt)
     lin = kml.newlinestring(name=f"Trayectoria {nombre}")
     lin.coords = [(c[1], c[0], c[2]) for c in coordenadas]
     buffer = BytesIO()
@@ -63,18 +64,15 @@ fecha = st.date_input("Fecha")
 if st.button("Buscar"):
     icao24 = AIRCRAFT_DB.get(registro)
     if not icao24:
-        st.error(f"El registro '{registro}' no está en la base de datos.")
+        st.error(f"El registro '{registro}' no está en la base de datos. Agrégalo al diccionario AIRCRAFT_DB.")
     else:
         with st.spinner('Procesando datos desde OpenSky...'):
             datos = buscar_vuelos_opensky(icao24, fecha)
             
             if datos == "ERROR_SECRETS":
-                st.error("❌ Configura tus credenciales en los Secrets.")
+                st.error("❌ Configura tus credenciales en los Secrets de Streamlit.")
             elif datos and 'states' in datos and datos['states']:
                 vuelos = procesar_vuelos(datos['states'])
                 st.success(f"✅ Se encontraron {len(vuelos)} tramos de vuelo.")
                 
-                for i, coords in enumerate(vuelos):
-                    col1, col2 = st.columns([3, 1])
-                    col1.write(f"✈️ Tramo {i+1}: {len(coords)} puntos de datos.")
-                    archivo = generar_kmz(f
+                for i, coords in enumerate(vuelos
