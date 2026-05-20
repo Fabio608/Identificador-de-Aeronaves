@@ -1,21 +1,25 @@
-import requests
 import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, firestore
 
-def obtener_vuelo_historico(icao24, fecha_inicio, fecha_fin):
-    # Convertimos fechas a timestamps UNIX (necesarios para la API)
-    # ... (código de conversión de fecha a timestamp)
-    
-    url = "https://opensky-network.org/api/states/history"
-    params = {
-        'icao24': icao24,
-        'begin': fecha_inicio_unix,
-        'end': fecha_fin_unix
-    }
-    
-    # Aquí usarías tus credenciales de OpenSky
-    response = requests.get(url, params=params, auth=('TU_USUARIO', 'TU_CONTRASEÑA'))
-    
-    if response.status_code == 200:
-        return response.json()
-    else:
-        return None
+st.title("Debug de la App")
+
+# 1. Verificar si hay Secretos cargados
+st.write("Verificando Secrets...")
+if "FIREBASE_SERVICE_ACCOUNT" in st.secrets:
+    st.success("✅ FIREBASE_SERVICE_ACCOUNT encontrado")
+    try:
+        cred_dict = dict(st.secrets["FIREBASE_SERVICE_ACCOUNT"])
+        st.write("Configuración de credenciales cargada correctamente.")
+        
+        # 2. Inicializar Firebase
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            st.success("✅ Firebase inicializado")
+    except Exception as e:
+        st.error(f"❌ Error al inicializar Firebase: {e}")
+else:
+    st.error("❌ NO se encontró FIREBASE_SERVICE_ACCOUNT en los Secrets. Por favor, revísalos en Settings.")
+
+st.write("Si ves los mensajes en verde, la app está funcionando. Si no, revisa el error arriba.")
