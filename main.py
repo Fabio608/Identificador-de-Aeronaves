@@ -7,7 +7,7 @@ from io import BytesIO
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Extractor GIS de Vuelos", layout="wide", page_icon="✈️")
 
-# --- FUNCIONES AUXILIARES (Aisladas para evitar errores de sintaxis) ---
+# --- FUNCIONES AUXILIARES ---
 def consultar_api_radares(matricula, fecha_str):
     """Hace la petición a la API y maneja errores de conexión."""
     url = f"https://api.airplanes.live/v2/historical/{matricula}/{fecha_str}"
@@ -52,61 +52,3 @@ def generar_kmz_aeronautico(matricula, fecha_str, puntos_radar):
     linea.style.linestyle.color = "ff00ff00"  # Verde brillante en formato KML
     linea.style.linestyle.width = 4
     linea.altitudemode = simplekml.AltitudeMode.absolute
-    
-    # 2. Crear puntos individuales con marcas de tiempo para la tabla de atributos de QGIS
-    for coord, hora in zip(coordenadas_validas, tiempos):
-        pnto = kml.newpoint(name=hora)
-        pnto.coords = [(coord[1], coord[0], coord[2])]
-        pnto.description = f"Hora: {hora} | Altitud: {coord[2]} ft"
-        pnto.altitudemode = simplekml.AltitudeMode.absolute
-        
-    buffer_kmz = BytesIO()
-    kml.savekmz(buffer_kmz)
-    buffer_kmz.seek(0)
-    
-    return buffer_kmz, tiempos[0], tiempos[-1]
-
-
-# --- INTERFAZ DE USUARIO (STREAMLIT) ---
-st.title("✈️ Extractor de Trayectorias para QGIS")
-st.markdown("Carga la matrícula de cualquier aeronave (civil o militar) y descarga el recorrido exacto de un día específico.")
-
-col1, col2 = st.columns(2)
-with col1:
-    matricula = st.text_input("Matrícula de la aeronave (ej: VPFAZ o 944)", value="VPFAZ").strip().upper().replace("-", "")
-with col2:
-    fecha = st.date_input("Fecha a consultar", value=datetime.today())
-
-st.markdown("---")
-
-if st.button("🔍 Extraer Recorrido del Día", type="primary"):
-    with st.spinner("Buscando en la base de datos de antenas comunitarias..."):
-        fecha_str = fecha.strftime("%Y-%m-%d")
-        
-        # Llamamos a la función de red
-        data, error_msg = consultar_api_radares(matricula, fecha_str)
-        
-        if error_msg:
-            st.error(error_msg)
-         Lido = False
-        else:
-            puntos_radar = data.get("trace", [])
-            if not puntos_radar:
-                st.warning(f"⚠️ La aeronave {matricula} existe, pero no emitió señales de radar el {fecha_str}.")
-            else:
-                # Llamamos a la función de generación geográfica
-                buffer_kmz, hora_inicio, hora_fin = generar_kmz_aeronautico(matricula, fecha_str, puntos_radar)
-                
-                if not buffer_kmz:
-                    st.warning("⚠️ Los datos recibidos no contenían coordenadas geográficas válidas.")
-                else:
-                    st.success(f"✅ ¡Recorrido encontrado! Se procesaron {len(puntos_radar)} registros de posición.")
-                    st.info(f"⏱️ **Ventana de actividad registrada:** Desde las {hora_inicio} hasta las {hora_fin} (Hora UTC).")
-                    
-                    # Botón de descarga para el usuario
-                    st.download_button(
-                        label="💾 Descargar Archivo KMZ para QGIS",
-                        data=buffer_kmz,
-                        file_name=f"track_{matricula}_{fecha_str}.kmz",
-                        mime="application/vnd.google-earth.kmz"
-                    )
