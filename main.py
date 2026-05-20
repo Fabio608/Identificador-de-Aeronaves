@@ -13,10 +13,8 @@ st.markdown("Carga la matrícula de cualquier aeronave (civil o militar) y desca
 # --- FORMULARIO DE BÚSQUEDA ---
 col1, col2 = st.columns(2)
 with col1:
-    # Convertimos a mayúsculas y quitamos guiones por las dudas
     matricula = st.text_input("Matrícula de la aeronave (ej: VPFAZ o 944)", value="VPFAZ").strip().upper().replace("-", "")
 with col2:
-    # Calendario para elegir el día
     fecha = st.date_input("Fecha a consultar", value=datetime.today())
 
 st.markdown("---")
@@ -25,10 +23,7 @@ st.markdown("---")
 if st.button("🔍 Extraer Recorrido del Día", type="primary"):
     with st.spinner("Buscando en la base de datos de antenas comunitarias..."):
         
-        # Formateamos la fecha a YYYY-MM-DD para la API
         fecha_str = fecha.strftime("%Y-%m-%d")
-        
-        # Consultamos la API histórica libre de Airplanes.live (no pide token ni claves)
         url = f"https://api.airplanes.live/v2/historical/{matricula}/{fecha_str}"
         
         try:
@@ -40,18 +35,15 @@ if st.button("🔍 Extraer Recorrido del Día", type="primary"):
                 st.error(f"❌ Error de servidor (Código {response.status_code}). Intenta de nuevo en unos minutos.")
             else:
                 data = response.json()
-                # La API devuelve los puntos de radar en una lista llamada 'trace'
                 puntos_radar = data.get("trace", [])
                 
                 if not puntos_radar:
                     st.warning(f"⚠️ La aeronave {matricula} existe, pero no emitió señales de radar el {fecha_str}.")
                 else:
-                    # Procesamos las coordenadas
                     coordenadas_validas = []
                     tiempos = []
                     
                     for p in puntos_radar:
-                        # Estructura de la API: p[0]= timestamp, p[1]= lat, p[2]= lon, p[3]= altitud
                         timestamp = p[0]
                         lat = p[1]
                         lon = p[2]
@@ -59,14 +51,22 @@ if st.button("🔍 Extraer Recorrido del Día", type="primary"):
                         
                         if lat is not None and lon is not None:
                             coordenadas_validas.append((lat, lon, alt))
-                            # Guardamos la hora legible para mostrar en la interfaz
                             hora_legible = datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')
                             tiempos.append(hora_legible)
                     
                     # --- MOSTRAR RESULTADOS ---
                     st.success(f"✅ ¡Recorrido encontrado! Se procesaron {len(coordenadas_validas)} puntos de posicionamiento.")
                     
-                    # Datos estadísticos rápidos del vuelo
+                    # Datos estadísticos rápidos del vuelo (Corregido para evitar SyntaxError)
                     hora_inicio = tiempos[0]
                     hora_fin = tiempos[-1]
-                    st.info(f"⏱️ **Ventana de actividad
+                    texto_info = f"⏱️ Ventana de actividad registrada: Desde las {hora_inicio} hasta las {hora_fin} (Hora UTC)."
+                    st.info(texto_info)
+                    
+                    # --- GENERAR EL ARCHIVO KMZ ---
+                    kml = simplekml.Kml()
+                    
+                    # 1. Creamos la línea continua de la ruta
+                    linea = kml.newlinestring(name=f"Ruta_{matricula}_{fecha_str}")
+                    linea.coords = [(c[1], c[0], c[2]) for c in coordenadas_validas]
+                    linea.style.linestyle.color = "ff00ff00"  # Verde brillante
