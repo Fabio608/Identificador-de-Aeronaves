@@ -1,13 +1,15 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
-import requests
 import time
 
 # --- Configuración de Firebase ---
+# Inicializamos la app solo si no está inicializada previamente
 if not firebase_admin._apps:
-    # Asegúrate de tener el archivo JSON en la misma carpeta
-    cred = credentials.Certificate("serviceAccountKey.json")
+    # Usamos los credenciales desde los secretos de Streamlit
+    # Esto reemplaza el uso de archivos físicos y es más seguro
+    cred_dict = dict(st.secrets["FIREBASE_SERVICE_ACCOUNT"])
+    cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
@@ -17,12 +19,10 @@ st.set_page_config(page_title="Flight Tracker", layout="centered")
 
 # --- Funciones de Lógica ---
 def get_flights(reg):
-    # Simulación de llamada a tu API backend
-    # response = requests.get(f"https://tu-api.com/flights/{reg}")
-    # return response.json().get('flights', [])
+    # Simulación de búsqueda (aquí irá tu llamada real a la API)
     return [{"id": "FL1", "flightNumber": "AR1234", "origin": "EZE", "destination": "CRV", "status": "En Vuelo"}]
 
-# --- Interfaz ---
+# --- Interfaz de Usuario ---
 st.title("✈️ Flight Tracker")
 st.markdown("### Telemetry Engine")
 
@@ -60,8 +60,13 @@ st.divider()
 st.subheader("Mis Aeronaves")
 new_reg = st.text_input("Agregar nueva matrícula", key="new_reg")
 if st.button("Registrar en Firestore"):
-    db.collection("aircraft").add({"registration": new_reg.upper(), "timestamp": firestore.SERVER_TIMESTAMP})
-    st.rerun()
+    if new_reg:
+        db.collection("aircraft").add({
+            "registration": new_reg.upper(), 
+            "timestamp": firestore.SERVER_TIMESTAMP
+        })
+        st.success("Aeronave registrada")
+        st.rerun()
 
 # Listado desde Firestore
 st.write("Aeronaves guardadas:")
