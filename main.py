@@ -1,52 +1,42 @@
-import streamlit as st
-from FlightRadar24 import FlightRadar24API
+import folium
 
-# 1. Inicializar la API y la memoria de la aplicación
-fr_api = FlightRadar24API()
+# 1. Definimos coordenadas de ejemplo (Ruta Santa Rosa a Bariloche)
+# Valores de ejemplo de "Corrección de Inyector" (Cuanto más alto, peor el inyector)
+ruta_ejemplo = [
+    {"lat": -36.62, "lon": -64.29, "valor": 2.0},   # Santa Rosa (Verde - OK)
+    {"lat": -37.50, "lon": -66.00, "valor": 4.5},   # En ruta (Verde - OK)
+    {"lat": -39.00, "lon": -68.00, "valor": 9.0},   # Zona de carga (Amarillo - Atención)
+    {"lat": -40.50, "lon": -70.50, "valor": 15.0}  # Cerca de Bariloche (Rojo - Falla)
+]
 
-if "trayectoria_lista" not in st.session_state:
-    st.session_state.trayectoria_lista = None
+# 2. Creamos el mapa centrado en el medio de la ruta
+m = folium.Map(location=[-38.5, -67.0], zoom_start=6)
 
-st.title("🗺️ Buscador de Trayectorias")
+# 3. Función para asignar colores según el valor
+def get_color(valor):
+    if valor < 5:
+        return 'green'
+    elif valor < 12:
+        return 'orange'
+    else:
+        return 'red'
 
-# 2. Zona de Inputs (Formulario seguro)
-# Usar un form agrupa los elementos y evita que la app intente recargarse a mitad de escritura
-with st.form(key="buscador_vuelo"):
-    codigo_vuelo = st.text_input("Código de vuelo (ej. AR1300):")
-    boton_buscar = st.form_submit_button(label="Buscar Trayectoria")
+# 4. Dibujamos los puntos en el mapa
+for punto in ruta_ejemplo:
+    folium.CircleMarker(
+        location=[punto['lat'], punto['lon']],
+        radius=10,
+        color=get_color(punto['valor']),
+        fill=True,
+        fill_color=get_color(punto['valor']),
+        fill_opacity=0.7,
+        popup=f"Corrección: {punto['valor']}"
+    ).add_to(m)
 
-# 3. Zona de Procesamiento (Solo guarda datos, no dibuja nada complejo aún)
-if boton_buscar and codigo_vuelo:
-    with st.spinner("Conectando con el playback de Flightradar24..."):
-        try:
-            # Reemplazá esto por tu lógica real de búsqueda de vuelos
-            vuelos = fr_api.get_flights(aircraft_type=codigo_vuelo) 
-            
-            if vuelos:
-                # Simulamos que tomamos el primer vuelo encontrado para extraer su trail
-                detalles = fr_api.get_flight_details(vuelos[0].id)
-                
-                # Guardamos los datos puros en la memoria de la sesión
-                st.session_state.trayectoria_lista = detalles.get('trail', [])
-            else:
-                st.warning("No se encontraron vuelos históricos recientes con ese código.")
-                st.session_state.trayectoria_lista = None
-        except Exception as e:
-            st.error(f"Error de conexión: {e}")
+# 5. Guardar o mostrar el mapa
+# Si estás en un Jupyter Notebook, simplemente escribe 'm'
+# Si quieres guardarlo como archivo HTML:
+m.save("mapa_inyectores.html")
 
----
-
-# 4. Zona de Renderizado Seguro (Fuera del botón, libre de glitches de JavaScript)
-if st.session_state.trayectoria_lista:
-    st.success("¡Datos recuperados con éxito!")
-    
-    # Extraemos las coordenadas de manera limpia
-    latitudes = [punto['lat'] for punto in st.session_state.trayectoria_lista]
-    longitudes = [punto['lng'] for punto in st.session_state.trayectoria_lista]
-    
-    # Dibujamos de forma nativa y segura
-    import pandas as pd
-    df_mapa = pd.DataFrame({'lat': latitudes, 'lon': longitudes})
-    
-    st.subheader("Visualización del trayecto")
-    st.map(df_mapa)
+# Para visualizarlo aquí (instrucción simbólica):
+m
